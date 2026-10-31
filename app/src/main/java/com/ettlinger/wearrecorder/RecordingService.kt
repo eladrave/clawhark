@@ -1,6 +1,8 @@
 package com.ettlinger.wearrecorder
 
 import android.app.*
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioFormat
@@ -8,7 +10,6 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.*
 import kotlinx.coroutines.*
-import java.io.File
 
 /** Capture owns local durability. Network work never runs on this loop. */
 class RecordingService : Service() {
@@ -129,6 +130,8 @@ class RecordingService : Service() {
                         recorder = openMicrophone()
                         lastReadAt = SystemClock.elapsedRealtime()
                         notifyState("Waiting for microphone audio")
+                    } catch (e: SecurityException) {
+                        throw e
                     } catch (e: Exception) {
                         capturing = false
                         notifyState("Microphone unavailable. Retrying. Saved audio retained.")
@@ -244,6 +247,7 @@ class RecordingService : Service() {
             .setContentIntent(open).setOngoing(requested).build()
     }
     private fun notifyState(message: String) {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(message))
     }
 }

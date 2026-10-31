@@ -9,7 +9,6 @@ import android.view.View
 import android.widget.*
 import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.*
-import java.io.File
 
 /** Recording is available offline, independently of cloud authentication. */
 class MainActivity : Activity() {
