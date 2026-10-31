@@ -43,18 +43,29 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     return@withContext Result.success()
                 }
                 val uploader = DriveUploader(store)
+                var failed = false
+                var consecutiveFailures = 0
                 for (file in store.pending()) {
                     if (isStopped) return@withContext Result.retry()
                     status("Uploading ${store.pending().size} saved files")
                     val copy = uploader.uploadFile(file)
                     if (copy == null) {
                         status("Upload pending. Audio retained; will retry.")
-                        return@withContext Result.retry()
+                        failed = true
+                        consecutiveFailures++
+                        if (consecutiveFailures >= 3) break
+                        continue // A single bad object must not strand otherwise healthy recordings.
                     }
+                    consecutiveFailures = 0
                     store.acknowledge(file, copy.id, copy.size, copy.md5)
                 }
-                status("Saved files verified in Drive")
-                Result.success()
+                if (failed) {
+                    status("Some uploads pending. Audio retained; will retry.")
+                    Result.retry()
+                } else {
+                    status("Saved files verified in Drive")
+                    Result.success()
+                }
             } catch (e: Exception) {
                 AppLog.e("Upload", "Sync interrupted; local audio retained", e)
                 status("Sync needs retry. Audio retained.")
