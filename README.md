@@ -30,7 +30,7 @@ bash scripts/test-recording-store.sh
 gradle --no-daemon testDebugUnitTest assembleDebug lintDebug
 ```
 
-CI uses a clean Gradle distribution rather than executing the inherited wrapper binary. The inherited `openclaw/Software-3.0.zip` and README download redirects have been removed from this development branch. No files from that archive are needed or executed.
+CI validates the wrapper JAR against Gradle’s published checksums before invoking it directly with Java to obtain Gradle 8.5. It does not execute the inherited wrapper shell script. The inherited `openclaw/Software-3.0.zip` and README download redirects have been removed from this development branch. No files from that archive are needed or executed.
 
 The host tests exercise real filesystem writes, locks, an abruptly killed writer process, partial recovery, cloud receipts, storage pressure, and account isolation. Android unit tests simulate ambiguous HTTP responses, retries, conflicts, mismatched copies, and account mismatch.
 
