@@ -188,7 +188,7 @@ object AuthManager {
                     expiresIn = json.getInt("expires_in"),
                     interval = json.getInt("interval")
                 )
-                AppLog.i(TAG, "Device code received: ${result.userCode} (expires in ${result.expiresIn}s)")
+                AppLog.i(TAG, "Device authorization requested")
                 return@withContext result
             } else {
                 AppLog.e(TAG, "Device code request failed HTTP $code")
@@ -354,3 +354,4 @@ object AuthManager {
         }
     }
 }
+

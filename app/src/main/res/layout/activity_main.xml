@@ -58,6 +58,11 @@
             android:textStyle="bold"
             android:contentDescription="Link Google Drive account"
             android:layout_marginTop="8dp" />
+        <Button
+            android:id="@+id/offlineBtn"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="RECORD OFFLINE" />
     </LinearLayout>
 
     <!-- Recording section (shown when authenticated) -->
@@ -82,8 +87,8 @@
 
         <Button
             android:id="@+id/toggleBtn"
-            android:layout_width="100dp"
-            android:layout_height="100dp"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
             android:text="START"
             android:textSize="16sp"
             android:textStyle="bold"
@@ -97,9 +102,17 @@
             android:layout_height="wrap_content"
             android:text="Tap to record"
             android:textColor="#BBBBBB"
-            android:textSize="14sp"
+            android:textSize="11sp"
+            android:maxLines="4"
             android:textAlignment="center"
-            android:layout_marginTop="6dp" />
+            android:layout_marginTop="4dp" />
+        <Button
+            android:id="@+id/linkBtn"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="LINK DRIVE"
+            android:textSize="12sp" />
     </LinearLayout>
 
 </androidx.wear.widget.BoxInsetLayout>
+

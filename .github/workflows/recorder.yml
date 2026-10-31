@@ -1,0 +1,36 @@
+name: Recorder validation
+on:
+  push:
+    branches: ['codex/recorder-*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Test durable spool on real files
+        run: bash scripts/test-recording-store.sh
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+      - name: Unit tests, Android build, and lint
+        run: gradle --no-daemon testDebugUnitTest assembleDebug lintDebug
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recorder-validation
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/reports/
+          retention-days: 7

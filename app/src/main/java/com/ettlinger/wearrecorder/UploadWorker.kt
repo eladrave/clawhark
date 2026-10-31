@@ -1,98 +1,65 @@
 package com.ettlinger.wearrecorder
 
 import android.content.Context
-import androidx.work.CoroutineWorker
-import androidx.work.WorkerParameters
+import androidx.work.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-
     companion object {
-        const val TAG = "Upload"
         const val WORK_NAME = "upload_recordings"
-        const val STALE_THRESHOLD_MS = 10 * 60 * 1000L // 10 minutes
+        const val PREF_STATUS = "upload_status"
+        private const val IMMEDIATE = "upload_immediate"
+        private fun constraints() = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+
+        fun schedule(context: Context) {
+            val wm = WorkManager.getInstance(context)
+            wm.cancelUniqueWork("upload_fallback") // migrate the legacy second upload schedule
+            wm.enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE,
+                PeriodicWorkRequestBuilder<UploadWorker>(15, TimeUnit.MINUTES)
+                    .setConstraints(constraints()).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+        }
+        fun kick(context: Context) {
+            // Coalesce offline wakes instead of building thousands of jobs. The periodic pass covers snapshot races.
+            WorkManager.getInstance(context).enqueueUniqueWork(IMMEDIATE, ExistingWorkPolicy.KEEP,
+                OneTimeWorkRequestBuilder<UploadWorker>().setConstraints(constraints())
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+        }
     }
 
-    override suspend fun doWork(): Result {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         AppLog.init(applicationContext)
         AuthManager.init(applicationContext)
-
-        val dir = File(applicationContext.filesDir, "recordings")
-        if (!dir.exists()) return Result.success()
-
-        // Recover stale .uploading files FIRST — before any early returns.
-        // These are from previous crashed workers. Only recover files older than
-        // 10 minutes to avoid stealing files a concurrent worker is actively uploading.
-        recoverStaleFiles(dir)
-
-        if (!AuthManager.isAuthenticated()) {
-            AppLog.d(TAG, "Not authenticated — skipping upload")
-            return Result.success()
-        }
-
-        // Only upload .m4a files (not .tmp files which are still being written)
-        val files = dir.listFiles()?.filter { it.extension == "m4a" }?.sortedBy { it.name } ?: emptyList()
-        if (files.isEmpty()) {
-            AppLog.d(TAG, "No files to upload")
-            return Result.success()
-        }
-
-        AppLog.i(TAG, "Upload worker started — ${files.size} files pending")
-        val uploader = DriveUploader()
-        var succeeded = 0
-        var failed = 0
-        var consecutiveFailures = 0
-
-        for (file in files) {
-            // Claim the file by renaming to .uploading — prevents concurrent workers
-            // from uploading the same file
-            val uploadingFile = File(file.parent, file.name + ".uploading")
-            if (!file.renameTo(uploadingFile)) {
-                // File disappeared or another worker claimed it
-                AppLog.d(TAG, "Could not claim ${file.name} — skipping (likely another worker)")
-                continue
-            }
-
-            AppLog.i(TAG, "Uploading: ${file.name} (${uploadingFile.length() / 1024}KB)")
-            val startMs = System.currentTimeMillis()
-            val ok = uploader.uploadFile(uploadingFile)
-            val elapsed = System.currentTimeMillis() - startMs
-
-            if (ok) {
-                uploadingFile.delete()
-                succeeded++
-                consecutiveFailures = 0
-                AppLog.i(TAG, "Upload SUCCESS: ${file.name} in ${elapsed}ms ($succeeded/${files.size})")
-            } else {
-                // Rename back so it can be retried next time
-                if (!uploadingFile.renameTo(file)) {
-                    AppLog.w(TAG, "Could not restore ${uploadingFile.name} — file may be orphaned")
+        val prefs = applicationContext.getSharedPreferences(RecordingService.PREF_FILE, Context.MODE_PRIVATE)
+        fun status(message: String) { prefs.edit().putString(PREF_STATUS, message).apply() }
+        val store = RecordingStore(File(applicationContext.filesDir, "recordings"))
+        val lock = store.tryLock("upload") ?: return@withContext Result.retry()
+        lock.use {
+            try {
+                store.recoverLegacyUploads()
+                if (!AuthManager.isAuthenticated()) {
+                    status("Link Drive to upload. Audio retained.")
+                    return@withContext Result.success()
                 }
-                failed++
-                consecutiveFailures++
-                AppLog.e(TAG, "Upload FAILED: ${file.name} after ${elapsed}ms ($failed failures)")
-                if (consecutiveFailures >= 3) {
-                    AppLog.e(TAG, "3 consecutive failures — stopping (likely network issue)")
-                    break
+                val uploader = DriveUploader(store)
+                for (file in store.pending()) {
+                    if (isStopped) return@withContext Result.retry()
+                    status("Uploading ${store.pending().size} saved files")
+                    val copy = uploader.uploadFile(file)
+                    if (copy == null) {
+                        status("Upload pending. Audio retained; will retry.")
+                        return@withContext Result.retry()
+                    }
+                    store.acknowledge(file, copy.id, copy.size, copy.md5)
                 }
-            }
-        }
-
-        AppLog.i(TAG, "Upload worker done — $succeeded succeeded, $failed failed of ${files.size}")
-        return if (failed == 0) Result.success() else Result.retry()
-    }
-
-    private fun recoverStaleFiles(dir: File) {
-        val now = System.currentTimeMillis()
-        val staleUploading = dir.listFiles()?.filter {
-            it.extension == "uploading" && (now - it.lastModified() > STALE_THRESHOLD_MS)
-        } ?: emptyList()
-        for (stale in staleUploading) {
-            val ageMs = now - stale.lastModified()
-            val originalName = stale.name.removeSuffix(".uploading")
-            val original = File(dir, originalName)
-            if (stale.renameTo(original)) {
-                AppLog.i(TAG, "Recovered stale uploading file: $originalName (age: ${ageMs / 1000}s)")
+                status("Saved files verified in Drive")
+                Result.success()
+            } catch (e: Exception) {
+                AppLog.e("Upload", "Sync interrupted; local audio retained", e)
+                status("Sync needs retry. Audio retained.")
+                Result.retry()
             }
         }
     }
