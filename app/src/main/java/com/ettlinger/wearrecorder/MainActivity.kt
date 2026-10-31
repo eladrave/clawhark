@@ -140,7 +140,7 @@ class MainActivity : Activity() {
             prefs.contains(RecordingService.PREF_ERROR) -> "NEEDS ATTENTION"
             else -> "STOPPED"
         }
-        val store = RecordingStore(File(filesDir, "recordings"))
+        val store = RecordingFiles.open(this)
         val megabytes = String.format("%.1f", store.bytesUsed() / 1024.0 / 1024.0)
         val detail = prefs.getString(RecordingService.PREF_ERROR, null)
             ?: prefs.getString(UploadWorker.PREF_STATUS, "Audio saved on watch")

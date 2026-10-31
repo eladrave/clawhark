@@ -43,7 +43,7 @@ class RecordingService : Service() {
     override fun onCreate() {
         super.onCreate()
         AppLog.init(this)
-        store = RecordingStore(File(filesDir, "recordings"))
+        store = RecordingFiles.open(this)
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Recording", NotificationManager.IMPORTANCE_LOW)
         )

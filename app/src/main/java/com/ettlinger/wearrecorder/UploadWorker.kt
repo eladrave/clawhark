@@ -34,7 +34,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         AuthManager.init(applicationContext)
         val prefs = applicationContext.getSharedPreferences(RecordingService.PREF_FILE, Context.MODE_PRIVATE)
         fun status(message: String) { prefs.edit().putString(PREF_STATUS, message).apply() }
-        val store = RecordingStore(File(applicationContext.filesDir, "recordings"))
+        val store = RecordingFiles.open(applicationContext)
         val lock = store.tryLock("upload") ?: return@withContext Result.retry()
         lock.use {
             try {

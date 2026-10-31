@@ -15,9 +15,14 @@ public final class RecordingStore {
     public static final long MAX_BYTES = 4L * 1024 * 1024 * 1024;
     public static final long FREE_RESERVE = 200L * 1024 * 1024;
     private final File dir;
+    private final DirectorySync directorySync;
+    @FunctionalInterface public interface DirectorySync { void sync(File directory) throws IOException; }
 
-    public RecordingStore(File dir) throws IOException {
+    public RecordingStore(File dir) throws IOException { this(dir, RecordingStore::hostDirectorySync); }
+
+    public RecordingStore(File dir, DirectorySync directorySync) throws IOException {
         this.dir = dir;
+        this.directorySync = directorySync;
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("Cannot create recording directory");
     }
 
@@ -154,11 +159,15 @@ public final class RecordingStore {
     private static boolean validHeader(RandomAccessFile file) throws IOException {
         if (file.length() < 44) return false;
         byte[] actual = new byte[44]; file.seek(0); file.readFully(actual);
-        return new String(actual, 0, 4, StandardCharsets.US_ASCII).equals("RIFF")
-            && new String(actual, 8, 8, StandardCharsets.US_ASCII).equals("WAVEfmt ")
-            && actual[16] == 16 && actual[20] == 1 && actual[22] == 1
-            && actual[24] == (byte)0x80 && actual[25] == 0x3e && actual[34] == 16
-            && new String(actual, 36, 4, StandardCharsets.US_ASCII).equals("data");
+        byte[] signature = new byte[] {
+            'R','I','F','F',0,0,0,0,'W','A','V','E','f','m','t',' ',
+            16,0,0,0,1,0,1,0,(byte)0x80,0x3e,0,0,0,0x7d,0,0,2,0,16,0,'d','a','t','a',0,0,0,0
+        };
+        for (int i=0;i<44;i++) {
+            if ((i>=4 && i<8) || i>=40) continue; // sizes may be stale after a crash
+            if (actual[i] != signature[i]) return false;
+        }
+        return true;
     }
 
     private static void header(RandomAccessFile f, long bytes) throws IOException {
@@ -213,7 +222,7 @@ public final class RecordingStore {
         new File(dir, "." + audio.getName() + ".receipt").delete();
     }
 
-    private static void durableText(File target, String text) throws IOException {
+    private void durableText(File target, String text) throws IOException {
         File tmp = new File(target.getPath() + ".new");
         try (FileOutputStream out = new FileOutputStream(tmp)) {
             out.write(text.getBytes(StandardCharsets.UTF_8)); out.getFD().sync();
@@ -221,7 +230,9 @@ public final class RecordingStore {
         if (!tmp.renameTo(target)) throw new IOException("Cannot persist recording metadata");
         syncDirectory(target.getParentFile());
     }
-    private static void syncDirectory(File directory) throws IOException {
+    private void syncDirectory(File directory) throws IOException { directorySync.sync(directory); }
+
+    private static void hostDirectorySync(File directory) throws IOException {
         try (FileChannel channel = FileChannel.open(directory.toPath(), StandardOpenOption.READ)) {
             channel.force(true);
         }

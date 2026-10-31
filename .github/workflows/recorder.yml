@@ -21,6 +21,9 @@ jobs:
       - name: Test durable spool on real files
         run: bash scripts/test-recording-store.sh
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.5'
