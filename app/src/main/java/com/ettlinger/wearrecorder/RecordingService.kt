@@ -30,6 +30,7 @@ class RecordingService : Service() {
     @Volatile private var requested = false
     @Volatile private var capturing = false
     @Volatile private var recorder: AudioRecord? = null
+    @Volatile private var lastAudioAt = 0L
     @Volatile var recordingStartTime = 0L
         private set
     @Volatile var totalChunks = 0
@@ -72,6 +73,15 @@ class RecordingService : Service() {
         requested = true
         prefs.edit().remove(PREF_ERROR).commit()
         job = scope.launch { capture() }
+        scope.launch {
+            while (requested) {
+                delay(5000)
+                if (capturing && SystemClock.elapsedRealtime() - lastAudioAt > 10_000) {
+                    fail("Microphone stopped supplying audio. Open ClawHark to resume.", IllegalStateException("Capture stalled"))
+                    try { recorder?.stop() } catch (_: Exception) { }
+                }
+            }
+        }
         return START_STICKY
     }
 
@@ -144,6 +154,7 @@ class RecordingService : Service() {
                 }
                 if (read == 0) { delay(20); continue }
                 lastReadAt = now
+                lastAudioAt = now
                 recoveryAttempt = 0
                 if (!capturing) notifyState("Recording. Audio saved on watch.")
                 capturing = true
