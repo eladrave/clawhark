@@ -23,7 +23,10 @@ public final class RecordingStore {
     public RecordingStore(File dir, DirectorySync directorySync) throws IOException {
         this.dir = dir;
         this.directorySync = directorySync;
-        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("Cannot create recording directory");
+        if (!dir.isDirectory()) {
+            if (!dir.mkdirs()) throw new IOException("Cannot create recording directory");
+            if (dir.getParentFile() != null) directorySync.sync(dir.getParentFile());
+        }
     }
 
     public File directory() { return dir; }

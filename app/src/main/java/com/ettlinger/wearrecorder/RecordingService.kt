@@ -27,6 +27,7 @@ class RecordingService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var job: Job? = null
+    private var watchdog: Job? = null
     @Volatile private var requested = false
     @Volatile private var capturing = false
     @Volatile private var recorder: AudioRecord? = null
@@ -73,7 +74,8 @@ class RecordingService : Service() {
         requested = true
         prefs.edit().remove(PREF_ERROR).commit()
         job = scope.launch { capture() }
-        scope.launch {
+        watchdog?.cancel()
+        watchdog = scope.launch {
             while (requested) {
                 delay(5000)
                 if (capturing && SystemClock.elapsedRealtime() - lastAudioAt > 10_000) {
@@ -93,6 +95,7 @@ class RecordingService : Service() {
         super.onDestroy()
     }
 
+    fun isFinalizing() = !requested && job?.isActive == true
     fun isBusy() = requested
     fun isCurrentlyRecording() = capturing
     fun isRecovering() = requested && !capturing
@@ -191,6 +194,8 @@ class RecordingService : Service() {
             fail(e.message ?: "Recording stopped. Saved audio retained.", e)
         } finally {
             withContext(NonCancellable) {
+                watchdog?.cancel()
+                watchdog = null
                 capturing = false
                 requested = false
                 try { recorder?.stop() } catch (_: Exception) { }

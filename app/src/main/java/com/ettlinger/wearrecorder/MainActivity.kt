@@ -52,6 +52,7 @@ class MainActivity : Activity() {
         authBtn = findViewById(R.id.authBtn)
         linkBtn = findViewById(R.id.linkBtn)
         toggleBtn.setOnClickListener {
+            if (service?.isFinalizing() == true) return@setOnClickListener
             if (service?.isBusy() == true) {
                 prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, false).commit()
                 startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
@@ -95,7 +96,7 @@ class MainActivity : Activity() {
     private fun hasMic() = ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun startCapture() {
-        if (!visible) return
+        if (!visible || service?.isFinalizing() == true) return
         val needed = mutableListOf<String>()
         if (!hasMic()) needed.add(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= 33 && ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
@@ -131,10 +132,12 @@ class MainActivity : Activity() {
     private fun updateUI() {
         val active = service?.isCurrentlyRecording() == true
         val busy = service?.isBusy() == true
+        toggleBtn.isEnabled = service?.isFinalizing() != true
         toggleBtn.text = if (busy) "STOP" else "START"
         toggleBtn.contentDescription = if (busy) "Stop recording" else "Start recording"
         toggleBtn.setBackgroundResource(if (active) R.drawable.circle_button_recording else R.drawable.circle_button)
         statusText.text = when {
+            service?.isFinalizing() == true -> "SAVING AUDIO"
             active -> "RECORDING"
             busy -> "RECOVERING MIC"
             prefs.contains(RecordingService.PREF_ERROR) -> "NEEDS ATTENTION"

@@ -10,7 +10,7 @@ import java.io.IOException
 object RecordingFiles {
     fun open(context: Context): RecordingStore = RecordingStore(File(context.filesDir, "recordings")) { directory ->
         try {
-            val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
+            val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
             try { Os.fsync(fd) } finally { Os.close(fd) }
         } catch (e: Exception) { throw IOException("Cannot sync recording directory", e) }
     }

@@ -50,7 +50,7 @@ class DriveUploader(
     }
 
     private fun allocateId(file: File, token: String): String {
-        store.readDriveId(file)?.let { return it }
+        store.readDriveId(file)?.let { store.saveDriveId(file, it); return it }
         val conn = connection("https://www.googleapis.com/drive/v3/files/generateIds?count=1&space=drive&type=files", token)
         val id = try { response(conn).getJSONArray("ids").getString(0) } finally { conn.disconnect() }
         store.saveDriveId(file, id) // synced before making the first mutating network request
