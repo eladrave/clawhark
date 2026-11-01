@@ -33,3 +33,13 @@ Do not clear app data, uninstall, factory reset, or delete partials while audio 
 - Google microphone foreground-service restrictions: https://developer.android.com/develop/background-work/services/fgs/service-types
 - Drive pre-generated IDs and retry semantics: https://developers.google.com/workspace/drive/api/guides/create-file
 - Omi custody/recovery requirements: https://github.com/BasedHardware/omi/blob/main/app/docs/apple-watch-recovery.md
+
+
+## Version 1.1 device checks
+
+1. Install as an update, retain Drive authorization and pending recordings. Add the Rave AI status tile.
+2. Confirm app/tile battery and charging status match the watch. Start/stop capture and verify the tile. Kill/stop the app and verify the cached active status expires conservatively; opening the app is needed after a force-stop.
+3. Keep Continuous as the comparison baseline. In Settings choose Speech only, restart capture, and test soft speech, normal speech, distant speakers, noisy rooms, TV/music, short pauses, and speech immediately after Start. Verify audible starts and the trailing two seconds. LISTENING should create no files during sustained non-speech. Compare actual battery drain over equal periods; do not infer all-day battery from fewer files.
+4. Speech files should contain pre-speech context (up to one second) and new names with local date/time/UTC offset. Long speech is split, and long silence ends a segment. Detector failure must surface VAD fallback and preserve audio.
+5. Enable logging, use Start/Stop/Settings/Sync and wait for battery samples. Inspect Drive/Rave AI/logs for dated plain-text batches with action and battery fields. Verify there are no tokens or audio contents. Test offline queuing, restart recovery, off/on logging, and unmetered-only waiting. Simulated quota/checksum tests cover retention; real-device low-space behavior still needs testing.
+6. Disable logging and confirm future log uploads pause. Existing cloud logs are not deleted automatically.

@@ -13,8 +13,8 @@ android {
         applicationId = "ai.etti.clawhark"
         minSdk = 30
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.1.0"
     }
 
     signingConfigs {
@@ -38,6 +38,10 @@ android {
         }
     }
 
+    buildFeatures { buildConfig = true }
+    // Compress JNI libraries for installer extraction; avoids old AGP ZIP page alignment limits.
+    packaging { jniLibs { useLegacyPackaging = true } }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -56,6 +60,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     implementation("androidx.wear:wear:1.3.0")
+    implementation("androidx.wear.tiles:tiles:1.3.0")
+    implementation("androidx.wear.protolayout:protolayout:1.1.0")
+    implementation("com.google.guava:guava:32.1.3-android")
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.activity:activity-ktx:1.8.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

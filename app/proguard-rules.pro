@@ -15,3 +15,6 @@
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn javax.annotation.**
 -dontwarn org.checkerframework.**
+
+# JNI exports use this class name.
+-keep class com.konovalov.vad.webrtc.VadWebRTC { *; }

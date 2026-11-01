@@ -10,6 +10,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.*
 import kotlinx.coroutines.*
+import com.konovalov.vad.webrtc.VadWebRTC
 
 /** Capture owns local durability. Network work never runs on this loop. */
 class RecordingService : Service() {
@@ -31,6 +32,9 @@ class RecordingService : Service() {
     private var watchdog: Job? = null
     @Volatile private var requested = false
     @Volatile private var capturing = false
+    @Volatile private var speechOnly = false
+    @Volatile private var speechActive = false
+    @Volatile private var vadFallback = false
     @Volatile private var recorder: AudioRecord? = null
     @Volatile private var lastAudioAt = 0L
     @Volatile var recordingStartTime = 0L
@@ -55,6 +59,7 @@ class RecordingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            AppLog.i("Recorder", "Stop requested")
             prefs.edit().putBoolean(PREF_SHOULD_RECORD, false).commit()
             requested = false
             capturing = false
@@ -73,6 +78,11 @@ class RecordingService : Service() {
             return START_NOT_STICKY
         }
         requested = true
+        speechOnly = AppSettings.speechOnly(this)
+        speechActive = false
+        vadFallback = false
+        AppLog.i("Recorder", "Start requested; mode=${modeLabel()}")
+        RecorderStatus.publish(this, "STARTING", modeLabel())
         prefs.edit().remove(PREF_ERROR).commit()
         job = scope.launch { capture() }
         watchdog?.cancel()
@@ -98,7 +108,9 @@ class RecordingService : Service() {
 
     fun isFinalizing() = !requested && job?.isActive == true
     fun isBusy() = requested
-    fun isCurrentlyRecording() = capturing
+    fun isCurrentlyRecording() = capturing && (!speechOnly || speechActive)
+    fun isListening() = capturing && speechOnly && !speechActive
+    fun modeLabel() = if (vadFallback) "VAD fallback: continuous" else if (speechOnly) "Speech only" else "Continuous"
     fun isRecovering() = requested && !capturing
     fun getRecordings() = store.pending()
     fun getStorageUsed() = store.bytesUsed()
@@ -107,6 +119,8 @@ class RecordingService : Service() {
         var lock: RecordingStore.Lock? = null
         var wakeLock: PowerManager.WakeLock? = null
         var segment: RecordingStore.Segment? = null
+        var vad: VadWebRTC? = null
+        var gate: SpeechGate? = null
         try {
             lock = store.tryLock("capture") ?: throw IllegalStateException("Recorder already active")
             store.recover()
@@ -123,6 +137,37 @@ class RecordingService : Service() {
             var lastReadAt = checkpointAt
             var lastStatusAt = checkpointAt
             var recoveryAttempt = 0
+            fun seal() {
+                segment?.seal()?.also { totalChunks++ }
+                segment = null
+                UploadWorker.kick(this@RecordingService)
+            }
+            fun append(input: ShortArray, length: Int, at: Long) {
+                if (segment == null) { segment = store.begin(at); checkpointAt = SystemClock.elapsedRealtime() }
+                for (i in 0 until length) {
+                    pcm[2 * i] = input[i].toByte()
+                    pcm[2 * i + 1] = (input[i].toInt() shr 8).toByte()
+                }
+                val current = checkNotNull(segment)
+                current.append(pcm, length * 2)
+                val now = SystemClock.elapsedRealtime()
+                if (now - checkpointAt >= 1000) {
+                    current.checkpoint(); store.checkSpace(SAMPLE_RATE * 2L); checkpointAt = now
+                }
+                if (current.payloadBytes() >= SEGMENT_BYTES) seal()
+            }
+            if (speechOnly) {
+                try {
+                    vad = VadWebRTC(AppSettings.sensitivity(this@RecordingService))
+                    gate = SpeechGate({ checkNotNull(vad).isSpeech(it) }, ::append, ::seal, { active, fallback ->
+                        speechActive = active; vadFallback = fallback
+                        if (fallback) AppLog.w("VAD", "Detector unavailable; retaining all audio")
+                        else AppLog.i("VAD", if (active) "Speech storage started" else "Waiting for speech")
+                        notifyState(if (fallback) "VAD unavailable. Saving all audio." else if (active) "Saving speech on watch" else "Listening for speech")
+                    })
+                } catch (_: Exception) { vadFallback = true; speechOnly = false; AppLog.w("VAD", "Cannot initialize; saving all audio") }
+                  catch (_: LinkageError) { vadFallback = true; speechOnly = false; AppLog.w("VAD", "Native detector unavailable; saving all audio") }
+            }
 
             while (requested && currentCoroutineContext().isActive) {
                 if (recorder == null) {
@@ -148,9 +193,9 @@ class RecordingService : Service() {
                 }
                 if (read < 0 || (read == 0 && now - lastReadAt > 10_000)) {
                     capturing = false
-                    segment?.seal()?.also { totalChunks++ }
-                    segment = null
-                    UploadWorker.kick(this@RecordingService)
+                    gate?.finish()
+                    speechActive = false
+                    seal()
                     try { audio.stop() } catch (_: Exception) { }
                     audio.release()
                     recorder = null
@@ -162,31 +207,14 @@ class RecordingService : Service() {
                 lastReadAt = now
                 lastAudioAt = now
                 recoveryAttempt = 0
-                if (!capturing) notifyState("Recording. Audio saved on watch.")
+                val resumed = !capturing
                 capturing = true
-                if (segment == null) {
-                    segment = store.begin(System.currentTimeMillis() - read * 1000L / SAMPLE_RATE)
-                    checkpointAt = now
-                }
-                for (i in 0 until read) {
-                    pcm[2 * i] = samples[i].toByte()
-                    pcm[2 * i + 1] = (samples[i].toInt() shr 8).toByte()
-                }
-                val currentSegment = checkNotNull(segment)
-                currentSegment.append(pcm, read * 2)
-                if (now - checkpointAt >= 1000) {
-                    currentSegment.checkpoint()
-                    store.checkSpace(SAMPLE_RATE * 2L)
-                    checkpointAt = now
-                }
-                if (currentSegment.payloadBytes() >= SEGMENT_BYTES) {
-                    currentSegment.seal()
-                    segment = null
-                    totalChunks++
-                    UploadWorker.kick(this@RecordingService)
-                }
+                if (resumed) notifyState(if (speechOnly) "Listening for speech" else "Recording. Audio saved on watch.")
+                val at = System.currentTimeMillis() - read * 1000L / SAMPLE_RATE
+                if (gate != null) gate.accept(samples, read, at) else append(samples, read, at)
                 if (now - lastStatusAt >= 30_000) {
-                    notifyState("Recording. ${store.pending().size} files awaiting upload")
+                    notifyState(if (isListening()) "Listening for speech. ${store.pending().size} files pending"
+                        else "Recording. ${store.pending().size} files awaiting upload")
                     lastStatusAt = now
                     AppLog.i("Service", "Capture active; pending=${store.pending().size}; bytes=${store.bytesUsed()}")
                 }
@@ -204,6 +232,8 @@ class RecordingService : Service() {
                 try { recorder?.stop() } catch (_: Exception) { }
                 try { recorder?.release() } catch (_: Exception) { }
                 recorder = null
+                try { gate?.finish() } catch (e: Exception) { AppLog.e("VAD", "Final speech buffer could not be written", e) }
+                try { vad?.close() } catch (_: Exception) { }
                 try { segment?.seal()?.also { totalChunks++ } }
                 catch (e: Exception) {
                     try { segment?.close() } catch (_: Exception) { }
@@ -214,6 +244,9 @@ class RecordingService : Service() {
                 UploadWorker.kick(this@RecordingService)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 if (prefs.contains(PREF_ERROR)) notifyState(prefs.getString(PREF_ERROR, "Recorder stopped")!!)
+                RecorderStatus.publish(this@RecordingService, if (prefs.contains(PREF_ERROR)) "NEEDS ATTENTION" else "STOPPED", modeLabel())
+                AppLog.i("Recorder", "Capture stopped; pending=${store.pending().size}")
+                AppLog.flush()
                 stopSelf()
             }
         }
@@ -247,6 +280,14 @@ class RecordingService : Service() {
             .setContentIntent(open).setOngoing(requested).build()
     }
     private fun notifyState(message: String) {
+        val state = when {
+            prefs.contains(PREF_ERROR) -> "NEEDS ATTENTION"
+            !requested -> "STOPPED"
+            isListening() -> "LISTENING"
+            capturing -> "RECORDING"
+            else -> "RECOVERING MIC"
+        }
+        RecorderStatus.publish(this, state, modeLabel())
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(message))
     }

@@ -20,6 +20,7 @@ class MainActivity : Activity() {
     private var startAfterPermission = false
     private lateinit var toggleBtn: Button
     private lateinit var statusText: TextView
+    private lateinit var batteryText: TextView
     private lateinit var infoText: TextView
     private lateinit var recordGroup: LinearLayout
     private lateinit var authGroup: LinearLayout
@@ -44,6 +45,11 @@ class MainActivity : Activity() {
         toggleBtn = findViewById(R.id.toggleBtn)
         statusText = findViewById(R.id.statusText)
         infoText = findViewById(R.id.infoText)
+        batteryText = findViewById(R.id.batteryText)
+        findViewById<Button>(R.id.settingsBtn).setOnClickListener {
+            AppLog.i("UI", "Settings opened")
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
         recordGroup = findViewById(R.id.recordGroup)
         authGroup = findViewById(R.id.authGroup)
         authStatus = findViewById(R.id.authStatus)
@@ -89,6 +95,7 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         visible = true
+        AppLog.i("UI", "Recorder screen opened")
         bound = bindService(Intent(this, RecordingService::class.java), connection, BIND_AUTO_CREATE)
         if (AuthManager.pendingDeviceLink() != null) linkDrive(false)
         else if (AuthManager.isAuthenticated()) { showRecorder(); UploadWorker.kick(this) }
@@ -97,6 +104,9 @@ class MainActivity : Activity() {
     }
     override fun onStop() {
         visible = false
+        AppLog.i("UI", "Recorder screen hidden")
+        AppLog.flush()
+        if (AppSettings.logging(this)) UploadWorker.kick(this)
         // Pause network polling, but retain the encrypted grant for onStart/process recreation.
         authJob?.cancel()
         if (bound) { unbindService(connection); bound = false; service = null }
@@ -141,6 +151,7 @@ class MainActivity : Activity() {
 
     private fun showRecorder() { authGroup.visibility = View.GONE; recordGroup.visibility = View.VISIBLE; updateUI() }
     private fun updateUI() {
+        batteryText.text = BatteryMonitor.label
         val active = service?.isCurrentlyRecording() == true
         val busy = service?.isBusy() == true
         toggleBtn.isEnabled = service?.isFinalizing() != true
@@ -150,6 +161,7 @@ class MainActivity : Activity() {
         statusText.text = when {
             service?.isFinalizing() == true -> "SAVING AUDIO"
             active -> "RECORDING"
+            service?.isListening() == true -> "LISTENING"
             busy -> "RECOVERING MIC"
             prefs.contains(RecordingService.PREF_ERROR) -> "NEEDS ATTENTION"
             else -> "STOPPED"
@@ -158,7 +170,7 @@ class MainActivity : Activity() {
         val megabytes = String.format("%.1f", store.bytesUsed() / 1024.0 / 1024.0)
         val detail = prefs.getString(RecordingService.PREF_ERROR, null)
             ?: prefs.getString(UploadWorker.PREF_STATUS, "Audio saved on watch")
-        infoText.text = "${store.pending().size} pending | $megabytes MB\n$detail"
+        infoText.text = "${store.pending().size} pending | $megabytes MB\n${service?.modeLabel() ?: if (AppSettings.speechOnly(this)) "Speech only" else "Continuous"}\n$detail"
         linkBtn.text = if (AuthManager.isAuthenticated()) "RELINK DRIVE" else "LINK DRIVE"
     }
 

@@ -8,7 +8,9 @@ import java.io.IOException
 
 /** Android directory fsync uses libcore's supported POSIX API, not host-JVM file-channel assumptions. */
 object RecordingFiles {
-    fun open(context: Context): RecordingStore = RecordingStore(File(context.filesDir, "recordings")) { directory ->
+    fun open(context: Context) = create(context, "recordings")
+    fun logs(context: Context) = create(context, "diagnostics")
+    private fun create(context: Context, name: String): RecordingStore = RecordingStore(File(context.filesDir, name)) { directory ->
         try {
             val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
             try { Os.fsync(fd) } finally { Os.close(fd) }

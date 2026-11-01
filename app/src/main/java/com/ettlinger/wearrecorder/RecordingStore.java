@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.*;
+import java.text.SimpleDateFormat;
 
 /** Durable PCM spool. No Android dependencies; exercised by the host recovery tests. */
 public final class RecordingStore {
@@ -53,9 +54,32 @@ public final class RecordingStore {
         return result;
     }
 
+    public List<File> pendingLogs() {
+        File[] files = dir.listFiles((d, n) -> n.endsWith(".log"));
+        List<File> result = files == null ? new ArrayList<>() : new ArrayList<>(Arrays.asList(files));
+        result.sort(Comparator.comparing(File::getName));
+        return result;
+    }
+
+    public File sealLog(File part) throws IOException {
+        if (!dir.equals(part.getParentFile()) || !part.getName().endsWith(".log.part")) throw new IOException("Invalid log batch");
+        try (RandomAccessFile f = new RandomAccessFile(part, "rw")) { f.getFD().sync(); }
+        File sealed = new File(dir, part.getName().substring(0, part.getName().length() - 5));
+        if (sealed.exists() || !part.renameTo(sealed)) throw new IOException("Cannot seal diagnostic log");
+        syncDirectory(dir);
+        return sealed;
+    }
+
+    public void recoverLogs() throws IOException {
+        File[] parts = dir.listFiles((d, n) -> n.endsWith(".log.part"));
+        if (parts == null) throw new IOException("Cannot list logs");
+        for (File part : parts) sealLog(part);
+    }
+
     public Segment begin(long startedAtMillis) throws IOException {
         checkSpace(44);
-        String name = String.format(Locale.ROOT, "recording_%013d_%s.wav", startedAtMillis, UUID.randomUUID());
+        String date = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.ROOT).format(new Date(startedAtMillis));
+        String name = "RaveAI_" + date + "_" + UUID.randomUUID() + ".wav";
         return new Segment(new File(dir, name));
     }
 

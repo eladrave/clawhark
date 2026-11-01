@@ -6,7 +6,7 @@ First milestone: continuous microphone capture, durable local recordings, and ve
 ## Current development behavior
 
 - Start/Stop on the watch. Recording works without linking Drive or having a network connection.
-- Mono PCM16 at 16 kHz, in approximately one-minute WAV files. Silence is retained; no amplitude gate discards quiet speech.
+- Mono PCM16 at 16 kHz, in approximately one-minute WAV files. Continuous mode retains silence. Optional Speech only mode uses local WebRTC VAD, a 1-second pre-buffer and 2-second trailing delay. Detector failure retains audio instead of silently dropping it.
 - Audio is written to app-private storage first, with a file sync about every second. Restart repairs interrupted WAV headers and retains complete samples.
 - A separate WorkManager queue uploads finalized files over an available network. Normal scheduling is best effort, not an exact timer.
 - Each recording gets a persisted, pre-generated Drive file ID. A retry after a lost HTTP response checks that same object instead of creating another copy.
@@ -16,7 +16,18 @@ First milestone: continuous microphone capture, durable local recordings, and ve
 
 **Development build, not yet qualified on physical Pixel Watch 5 hardware.** No all-day battery claim. Power loss may lose audio since the last successful filesystem sync; storage hardware guarantees still apply. Damaged legacy M4A partials are retained for manual recovery.
 
-WAV costs about **115 MB/hour, 2.76 GB/day** of continuous recording, plus headers. It is intentionally simple for recovery qualification. Compression, Wi-Fi-only upload controls, and encryption beyond device/app storage protection are future work. Upload currently permits metered connections and can consume substantial mobile data.
+WAV costs about **115 MB/hour, 2.76 GB/day** of continuous recording, plus headers. It is intentionally simple for recovery qualification. Compression and encryption beyond device/app storage protection remain future work. Upload permits metered connections by default; Settings offers unmetered-only uploads.
+
+## Rave AI 1.1 controls
+
+- Add **Rave AI status** using the watch's tile picker. It shows recording/listening/stopped status, battery, mode, pending recordings, and a status timestamp. Tap the tile to open the recorder. Updates are best effort; cached active status expires to CHECK RECORDER after a minute.
+- The app has a **SETTINGS** button. Continuous mode remains the default. To try **Speech only (beta)**, select it and restart capture. Sensitivity also applies on the next capture start. Quiet speech may be missed; TV speech can trigger recording. The microphone and CPU still listen, so battery savings are not promised.
+- Battery appears in both the app and tile, including charging state.
+- **Enable logging** is off by default. When on, app actions include battery levels; battery changes and 5-minute samples are recorded while the app/recorder is active. Immutable log batches upload to **Rave AI/logs** with ID/size/checksum verification before local cleanup. Logging has a 20 MiB budget plus the same free-space reserve as recordings, and stops writing at its limit instead of deleting unuploaded logs. Turning logging off pauses new diagnostics and log uploads, preserving queued logs.
+- **Unmetered uploads only** applies to recordings and logs. **SYNC NOW** queues a pass under that network preference.
+- New recording names include the watch's local date, time, milliseconds, numeric UTC offset, and unique suffix: `RaveAI_2026-11-01_11-42-18-123_-0500_<uuid>.wav`. Existing pending recordings keep their names and upload identities.
+
+WebRTC native release provenance and included licenses are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Omi uses Silero in software and dedicated activity detection on some hardware. No Omi implementation code is copied; a generic watch app cannot assume access to that dedicated hardware.
 
 ## Build and tests
 

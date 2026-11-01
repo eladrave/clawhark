@@ -82,4 +82,29 @@ class DriveUploaderTest {
         assertNull(f.uploader.uploadFile(f.audio)); assertTrue(f.audio.exists())
         assertEquals(1,f.requests.size)
     }
+    @Test fun diagnosticsAreCreatedInsideTheLogsChildAndRemainUntilAcknowledged() = runBlocking {
+        val store = RecordingStore(Files.createTempDirectory("log-upload-test").toFile())
+        val log = File(store.directory(), "RaveAI_log_test.log").apply { writeText("battery=90\n") }
+        val replies = ArrayDeque<Reply>()
+        replies.add(Reply("/about?",200,"""{"user":{"permissionId":"owner"}}"""))
+        replies.add(Reply("generateIds",200,"""{"ids":["log_id"]}"""))
+        replies.add(Reply("/files/log_id?",404,""))
+        replies.add(Reply("/files?q=",200,"""{"files":[{"id":"rave_root"}]}"""))
+        replies.add(Reply("/files?q=",200,"""{"files":[]}"""))
+        replies.add(Reply("/drive/v3/files",200,"""{"id":"logs_child"}"""))
+        replies.add(Reply("uploadType=multipart",200,"""{"id":"log_id"}"""))
+        replies.add(Reply("/files/log_id?",200,"""{"id":"log_id","size":"${log.length()}","md5Checksum":"${RecordingStore.digest(log,"MD5")}"}"""))
+        val requests = mutableListOf<Fake>()
+        val uploader = DriveUploader(store, { "synthetic" }, { url ->
+            val reply = replies.removeFirst(); assertTrue(url.contains(reply.match))
+            Fake(reply,url).also { requests.add(it) }
+        })
+        assertNotNull(uploader.uploadFile(log, logFile = true))
+        val folder = requests.first { it.requestMethod == "POST" && !it.url.toString().contains("multipart") }.sent.toString("UTF-8")
+        assertTrue(folder.contains("rave_root")); assertTrue(folder.contains("logs"))
+        val multipart = requests.first { it.url.toString().contains("multipart") }.sent.toString("UTF-8")
+        assertTrue(multipart.contains("logs_child")); assertTrue(multipart.contains("text/plain"))
+        assertTrue(log.exists())
+    }
+
 }

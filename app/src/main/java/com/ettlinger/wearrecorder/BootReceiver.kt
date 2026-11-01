@@ -10,6 +10,7 @@ import android.os.Build
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+        RecorderStatus.publish(context, "OPEN TO RESUME", if (AppSettings.speechOnly(context)) "Speech only" else "Continuous")
         UploadWorker.schedule(context)
         UploadWorker.kick(context)
         if (!context.getSharedPreferences(RecordingService.PREF_FILE, Context.MODE_PRIVATE)
