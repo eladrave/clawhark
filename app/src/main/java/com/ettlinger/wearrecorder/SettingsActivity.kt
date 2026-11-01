@@ -1,12 +1,16 @@
 package com.ettlinger.wearrecorder
 
 import android.app.Activity
+import android.app.AlertDialog
+import kotlinx.coroutines.*
 import android.os.Bundle
 import android.content.Context
 import android.view.View
 import android.widget.*
 
 class SettingsActivity : Activity() {
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    override fun onDestroy() { scope.cancel(); super.onDestroy() }
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         val column = LinearLayout(this).apply {
@@ -31,7 +35,9 @@ class SettingsActivity : Activity() {
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = action(position)
             }
         }
+        var presetStatus: TextView? = null
         fun changed(message: String) {
+            presetStatus?.text = "Selected preset: ${AppSettings.presetLabel(this)}"
             AppLog.i("Settings", "$message; ${AppSettings.profile(this)}")
             RecorderStatus.refreshTile(this)
         }
@@ -44,11 +50,13 @@ class SettingsActivity : Activity() {
         text("Rave AI settings • ${BuildConfig.VERSION_NAME}")
         text(BatteryMonitor.label)
         text("Battery test presets")
+        presetStatus = text("Selected preset: ${AppSettings.presetLabel(this)}")
         select(listOf("Choose a preset", "Baseline: 15-minute uploads", "Capture only: manual sync", "Logs only: 15-minute uploads"), 0) { position ->
             if (position != 0) {
                 AppSettings.applyPreset(this, position)
                 changed("Battery preset selected: $position")
                 UploadWorker.reconfigure(this)
+                Toast.makeText(this, "Selected: ${AppSettings.presetLabel(this)}", Toast.LENGTH_LONG).show()
                 recreate()
             }
         }
@@ -59,19 +67,21 @@ class SettingsActivity : Activity() {
             AppSettings.set(this, AppSettings.LOGGING, true)
             AppSettings.startTest(this)
             UploadWorker.testStarted(this)
-            AppLog.i("Test", "BEGIN; state=${RecorderStatus.state(this)}; active_mode=${RecorderStatus.mode(this)}; ${AppSettings.profile(this)}")
+            AppLog.i("Test", "BEGIN; state=${RecorderStatus.state(this)}; active_mode=${RecorderStatus.mode(this)}; firmware=${android.os.Build.DISPLAY}; security_patch=${android.os.Build.VERSION.SECURITY_PATCH}; ${AppSettings.profile(this)}")
             AppLog.flush()
             testStatus.text = "Battery test active"
             Toast.makeText(this, "Test marked; logging enabled", Toast.LENGTH_SHORT).show()
             recreate()
         }
-        button("END TEST & SYNC") {
-            AppLog.i("Test", "END; state=${RecorderStatus.state(this)}; active_mode=${RecorderStatus.mode(this)}; ${AppSettings.profile(this)}")
+        lateinit var endTest: Button
+        endTest = button("END TEST & SYNC") {
+            AppLog.i("Test", "END; state=${RecorderStatus.state(this)}; active_mode=${RecorderStatus.mode(this)}; firmware=${android.os.Build.DISPLAY}; security_patch=${android.os.Build.VERSION.SECURITY_PATCH}; ${AppSettings.profile(this)}")
             AppLog.flush()
             AppSettings.finishTest(this)
             testStatus.text = "Test ended"
+            endTest.isEnabled = false
             syncNow()
-        }
+        }.apply { isEnabled = AppSettings.testId(this@SettingsActivity) != "none" }
         text("Start recording in the main app first and let any active sync finish before testing. START marks the current session and enables logging; it does not start the microphone. END marks the end and syncs selected content. Capture continues until you press STOP in the main app.")
         text("Recording mode (applies next start)")
         val modes = RadioGroup(this)
@@ -161,6 +171,32 @@ class SettingsActivity : Activity() {
             UploadWorker.reconfigure(this)
         }
         button("SYNC NOW") { syncNow() }
+        text("Test recording cleanup")
+        text("Delete local test audio without resetting your Drive login, settings or diagnostic logs. Cloud copies are not deleted. Stop recording first.")
+        button("DELETE PENDING TEST RECORDINGS") {
+            if (getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE).getBoolean(RecordingService.PREF_SHOULD_RECORD, false)) {
+                Toast.makeText(this, "Stop recording first", Toast.LENGTH_LONG).show()
+            } else AlertDialog.Builder(this).setTitle("Delete local test recordings?")
+                .setMessage("Permanently delete pending audio on this watch, including interrupted test audio? Your Drive login, settings, logs and cloud files will stay.")
+                .setNegativeButton("CANCEL", null)
+                .setPositiveButton("DELETE TEST AUDIO") { _, _ ->
+                    UploadWorker.pauseForCleanup(this)
+                    scope.launch {
+                        try {
+                            val count = withContext(Dispatchers.IO) { RecordingFiles.open(this@SettingsActivity).deletePendingTestRecordings() }
+                            AppLog.i("Settings", "User deleted $count local test recordings; login/settings/logs preserved")
+                            val prefs = getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE)
+                            prefs.edit().putString(UploadWorker.PREF_AUDIO_STATUS, "Local test audio deleted")
+                                .putString(UploadWorker.PREF_STATUS, "Test audio deleted. Drive login preserved.").apply()
+                            Toast.makeText(this@SettingsActivity, "Deleted $count test recordings", Toast.LENGTH_LONG).show()
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: Exception) {
+                            AppLog.e("Settings", "Test cleanup incomplete; retry after stopping capture/sync", e)
+                            Toast.makeText(this@SettingsActivity, "Stop capture/sync, then retry cleanup", Toast.LENGTH_LONG).show()
+                        } finally { UploadWorker.schedule(this@SettingsActivity) }
+                    }
+                }.show()
+        }
         button("BACK") { finish() }
     }
 }

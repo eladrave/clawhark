@@ -1,6 +1,7 @@
 package com.ettlinger.wearrecorder
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.*
@@ -9,6 +10,13 @@ import java.nio.file.Files
 import java.util.ArrayDeque
 
 class DriveUploaderTest {
+    @Test fun workerCancellationInsideNetworkSetupPropagatesAndRetainsAudio() = runBlocking {
+        val store = RecordingStore(Files.createTempDirectory("cancel-upload").toFile())
+        val file = store.begin(1).let { it.append(ByteArray(640), 640); it.seal() }
+        val uploader = DriveUploader(store, { "synthetic" }, { throw CancellationException("worker stopped") })
+        try { uploader.uploadFile(file); fail("Cancellation was reported as a failed upload") }
+        catch (_: CancellationException) { assertTrue(file.exists()) }
+    }
     @Test fun pausedUploadsDoNotEvenRefreshATokenOrOpenAConnection() = runBlocking {
         val store = RecordingStore(Files.createTempDirectory("paused-upload").toFile())
         val file = store.begin(1).let { it.append(ByteArray(640), 640); it.seal() }

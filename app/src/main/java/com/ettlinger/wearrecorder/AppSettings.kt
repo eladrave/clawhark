@@ -37,6 +37,7 @@ object AppSettings {
         check(prefs(c).edit().putInt(UPLOAD_TIMING, if (preset == 2) UploadPolicy.MANUAL else UploadPolicy.EVERY_15)
             .putInt(UPLOAD_CONTENT, if (preset == 3) 1 else 0).commit())
     }
+    fun presetLabel(c: Context) = UploadPolicy.presetLabel(uploadTiming(c), uploadContent(c))
     fun logging(c: Context) = prefs(c).getBoolean(LOGGING, false)
     fun unmetered(c: Context) = prefs(c).getBoolean(UNMETERED, false)
     fun set(c: Context, key: String, value: Boolean) { check(prefs(c).edit().putBoolean(key, value).commit()) }

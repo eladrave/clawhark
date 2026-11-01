@@ -110,6 +110,24 @@ public final class RecordingStoreTest {
         test("clock collisions cannot overwrite a recording", () -> {
             RecordingStore s=store(); File a=sealed(s), b=sealed(s); check(!a.equals(b) && s.pending().size()==2,"Recording overwritten");
         });
+        test("explicit test cleanup deletes only audio and its metadata", () -> {
+            RecordingStore s=store(); File f=sealed(s); s.saveDriveId(f,"test_id"); s.bindCloudOwner("owner_one");
+            Files.write(new File(s.directory(),"test.log").toPath(),new byte[]{1,2,3});
+            Files.write(new File(s.directory(),"interrupted.wav.part").toPath(),new byte[]{4,5,6});
+            check(s.deletePendingTestRecordings()==2,"Audio cleanup count");
+            check(!f.exists() && !new File(s.directory(),"."+f.getName()+".drive-id").exists(),"Audio metadata retained");
+            check(new File(s.directory(),"test.log").exists(),"Diagnostic log deleted");
+            s.bindCloudOwner("owner_one");
+            try { s.bindCloudOwner("owner_two"); throw new AssertionError("Cloud ownership deleted"); } catch(IOException expected) { }
+            check(s.deletePendingTestRecordings()==0,"Repeated cleanup not idempotent");
+        });
+        test("test cleanup refuses active capture or upload", () -> {
+            RecordingStore s=store(); File f=sealed(s);
+            for(String name:new String[]{"capture","upload"}) try(RecordingStore.Lock lock=s.tryLock(name)) {
+                try { s.deletePendingTestRecordings(); throw new AssertionError("Deleted busy spool"); } catch(IOException expected) { }
+                check(f.exists(),"Busy recording deleted");
+            }
+        });
         System.out.println(passed + " host recovery tests passed");
     }
 }

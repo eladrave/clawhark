@@ -1,5 +1,6 @@
 package com.ettlinger.wearrecorder
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -146,8 +147,10 @@ class DriveUploader(
                 "Cloud copy does not match; local audio retained"
             }
             VerifiedCopy(id, localSize, localMd5)
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: UploadPaused) {
-            AppLog.i("Upload", "Upload paused by settings; local file retained")
+            AppLog.i("Upload", "Upload paused by policy or worker stop; local file retained")
             null
         } catch (e: Exception) {
             AppLog.e("Drive", "Upload not verified; local recording retained", e)

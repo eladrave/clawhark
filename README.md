@@ -70,3 +70,11 @@ The personal Rave AI OAuth client and configured test APK are ready; see [docs/g
 See [docs/recorder-qualification.md](docs/recorder-qualification.md) for staged tests, known limits, and recovery steps. Installation requires the owner's watch and wireless debugging, performed only as a separate device-testing step.
 
 MIT license. Omi's [watch recovery design](https://github.com/BasedHardware/omi/blob/main/app/docs/apple-watch-recovery.md) informed the durability and acknowledgment requirements. No Omi implementation code is copied here.
+
+### Version 1.4 sync recovery and visible test settings
+
+Current preset is derived from the selected upload timing/content and stays visible in Settings and the recorder. Preset changes show confirmation; unmatched combinations show Custom. Audio and log sync statuses are separate, including a last successful diagnostic sync time. The recorder shows its persisted actual capture mode when the service is unbound.
+
+Sync uploads diagnostics first, limits each worker to 20 objects or about 90 seconds between objects, and schedules successful continuations without failure backoff. A continuation keeps the original file modification-time cutoff so ongoing recording and upload-generated logs do not grow the same sync forever. The current HTTP request may exceed the soft time budget. Cancellation propagates to WorkManager and is reported as a pause with an Android stop reason where available. Stable Drive identity, verification and retention safeguards remain.
+
+Settings includes an explicitly confirmed **DELETE PENDING TEST RECORDINGS** action. Stop recording first. It cancels sync requests, requires both capture/upload locks, and deletes only local test audio and corresponding sidecars. It preserves diagnostics, Drive ownership/login, preferences and remote files. No deletion occurs on upgrade. See [the current trial and recovery procedure](docs/battery-testing.md).

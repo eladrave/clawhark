@@ -61,6 +61,31 @@ public final class RecordingStore {
         return result;
     }
 
+    /** Explicit user discard only. Excludes diagnostics, cloud ownership, preferences and credentials. */
+    public int deletePendingTestRecordings() throws IOException {
+        try (Lock capture = tryLock("capture")) {
+            if (capture == null) throw new IOException("Stop recording before deleting test recordings");
+            try (Lock upload = tryLock("upload")) {
+                if (upload == null) throw new IOException("Sync is still stopping; retry deletion shortly");
+                File[] files = dir.listFiles((d, n) -> n.endsWith(".wav") || n.endsWith(".m4a")
+                    || n.endsWith(".wav.part") || n.endsWith(".m4a.tmp") || n.endsWith(".m4a.uploading")
+                    || n.contains(".wav.part.damaged-") || n.contains(".m4a.tmp.damaged-"));
+                if (files == null) throw new IOException("Cannot list test recordings");
+                int deleted = 0;
+                for (File f : files) {
+                    if (!f.isFile() || !f.delete()) throw new IOException("Cannot delete test recording");
+                    deleted++;
+                    for (String suffix : new String[]{".drive-id", ".drive-id.new", ".receipt", ".receipt.new"}) {
+                        File metadata = new File(dir, "." + f.getName() + suffix);
+                        if (metadata.exists() && !metadata.delete()) throw new IOException("Cannot delete test metadata");
+                    }
+                }
+                syncDirectory(dir);
+                return deleted;
+            }
+        }
+    }
+
     public File sealLog(File part) throws IOException {
         if (!dir.equals(part.getParentFile()) || !part.getName().endsWith(".log.part")) throw new IOException("Invalid log batch");
         try (RandomAccessFile f = new RandomAccessFile(part, "rw")) { f.getFD().sync(); }

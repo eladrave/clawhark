@@ -10,7 +10,7 @@ class RaveApplication : Application() {
         AppLog.init(this)
         RecorderStatus.processStarted(this)
         BatteryMonitor.init(this)
-        AppLog.i("App", "Application started; version=${BuildConfig.VERSION_NAME}; sdk=${android.os.Build.VERSION.SDK_INT}; model=${android.os.Build.MODEL}")
+        AppLog.i("App", "Application started; version=${BuildConfig.VERSION_NAME}; sdk=${android.os.Build.VERSION.SDK_INT}; model=${android.os.Build.MODEL}; firmware=${android.os.Build.DISPLAY}; security_patch=${android.os.Build.VERSION.SECURITY_PATCH}")
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private var started = 0
             override fun onActivityStarted(activity: Activity) { started++; BatteryMonitor.appVisible = true }

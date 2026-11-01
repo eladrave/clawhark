@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class UploadPolicyTest {
+    @Test fun presetLabelIsDerivedFromCurrentPreferencesIncludingCustomCombinations() {
+        assertEquals("Capture only: manual sync", UploadPolicy.presetLabel(UploadPolicy.MANUAL, 0))
+        assertEquals("Baseline: 15-minute uploads", UploadPolicy.presetLabel(UploadPolicy.EVERY_15, 0))
+        assertEquals("Logs only: 15-minute uploads", UploadPolicy.presetLabel(UploadPolicy.EVERY_15, 1))
+        assertEquals("Custom", UploadPolicy.presetLabel(UploadPolicy.MANUAL, 1))
+        assertEquals("Custom", UploadPolicy.presetLabel(UploadPolicy.EVERY_60, 0))
+    }
     @Test fun manualOnlyRejectsEveryAutomaticUploadButPermitsExplicitSync() {
         for (content in 0..2) for (logFile in listOf(false, true))
             assertFalse(UploadPolicy.mayUpload(UploadPolicy.MANUAL, false, content, logFile))

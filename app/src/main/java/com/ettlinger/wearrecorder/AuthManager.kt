@@ -375,6 +375,8 @@ object AuthManager {
                 }
                 return@withContext null
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             AppLog.e(TAG, "Token refresh error", e)
             return@withContext null
