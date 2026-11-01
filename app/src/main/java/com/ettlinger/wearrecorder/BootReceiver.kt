@@ -19,7 +19,7 @@ class BootReceiver : BroadcastReceiver() {
         manager.createNotificationChannel(NotificationChannel(RecordingService.CHANNEL_ID, "Recording", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         manager.notify(RecordingService.NOTIFICATION_ID, Notification.Builder(context, RecordingService.CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("Resume ClawHark recording")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now).setContentTitle("Resume Rave AI recording")
             .setContentText("Watch restarted. Tap to resume; saved audio is retained.").setContentIntent(open).setAutoCancel(true).build())
     }
 }

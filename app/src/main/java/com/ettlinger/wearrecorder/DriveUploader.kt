@@ -36,14 +36,14 @@ class DriveUploader(
 
     private fun folder(token: String): String {
         folderId?.let { return it }
-        val lookup = connection("https://www.googleapis.com/drive/v3/files?q=name%3D%27ClawHark%27+and+mimeType%3D%27application%2Fvnd.google-apps.folder%27+and+trashed%3Dfalse&fields=files(id)", token)
+        val lookup = connection("https://www.googleapis.com/drive/v3/files?q=name%3D%27Rave%20AI%27+and+mimeType%3D%27application%2Fvnd.google-apps.folder%27+and+trashed%3Dfalse&fields=files(id)", token)
         val files = try { response(lookup).getJSONArray("files") } finally { lookup.disconnect() }
         if (files.length() > 0) return files.getJSONObject(0).getString("id").also { folderId = it }
         val create = connection("https://www.googleapis.com/drive/v3/files", token, "POST")
         return try {
             create.doOutput = true
             create.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            create.outputStream.use { it.write(JSONObject().put("name", "ClawHark")
+            create.outputStream.use { it.write(JSONObject().put("name", "Rave AI")
                 .put("mimeType", "application/vnd.google-apps.folder").toString().toByteArray(Charsets.UTF_8)) }
             response(create).getString("id").also { folderId = it }
         } finally { create.disconnect() }

@@ -1,4 +1,4 @@
-# ClawHark: Pixel Watch recorder
+# Rave AI: Pixel Watch recorder
 
 Development fork of [ivar2000/clawhark](https://github.com/ivar2000/clawhark).
 First milestone: continuous microphone capture, durable local recordings, and verified Google Drive upload.
@@ -38,11 +38,11 @@ The host tests exercise real filesystem writes, locks, an abruptly killed writer
 
 Recording works before cloud setup. For uploads:
 
-1. Enable Google Drive API in your own Google Cloud project.
+1. Google Cloud project `eladrave-rave-ai` (display name **Rave AI**) has the Google Drive API enabled. For a separate installation, enable the API in your own project.
 2. Configure an OAuth client for TVs and Limited Input devices with `drive.file` scope. Testing-mode consent must include your Google account.
 3. Copy `app/src/main/assets/oauth_config.json.example` to `oauth_config.json` in that directory and enter your client configuration. Do not commit it. Rebuild for your own installation.
 4. On watch, select Link Drive and authorize the displayed code at `google.com/device`.
-5. Record a short session; verify its WAV in the app-created `ClawHark` Drive folder before any extended trial.
+5. Record a short session; verify its WAV in the app-created `Rave AI` Drive folder before any extended trial.
 
 OAuth credentials and live Drive upload have not been configured or tested in this development session. OAuth tokens use the inherited encrypted preferences. The spool binds to the first linked Drive account's stable permission ID; a different account cannot adopt pending audio. A multi-account migration/export UI is not implemented.
 

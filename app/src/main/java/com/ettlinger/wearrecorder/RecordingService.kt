@@ -68,7 +68,7 @@ class RecordingService : Service() {
         try {
             startForeground(NOTIFICATION_ID, notification("Starting recorder"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } catch (e: Exception) {
-            fail("Open ClawHark to resume recording", e)
+            fail("Open Rave AI to resume recording", e)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -80,7 +80,7 @@ class RecordingService : Service() {
             while (requested) {
                 delay(5000)
                 if (capturing && SystemClock.elapsedRealtime() - lastAudioAt > 10_000) {
-                    fail("Microphone stopped supplying audio. Open ClawHark to resume.", IllegalStateException("Capture stalled"))
+                    fail("Microphone stopped supplying audio. Open Rave AI to resume.", IllegalStateException("Capture stalled"))
                     try { recorder?.stop() } catch (_: Exception) { }
                 }
             }
@@ -144,7 +144,7 @@ class RecordingService : Service() {
                 if (!requested) break
                 val now = SystemClock.elapsedRealtime()
                 if (audio.activeRecordingConfiguration?.isClientSilenced == true) {
-                    throw IllegalStateException("Microphone silenced by another app. Open ClawHark to resume.")
+                    throw IllegalStateException("Microphone silenced by another app. Open Rave AI to resume.")
                 }
                 if (read < 0 || (read == 0 && now - lastReadAt > 10_000)) {
                     capturing = false
@@ -242,7 +242,7 @@ class RecordingService : Service() {
 
     private fun notification(message: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, CHANNEL_ID).setContentTitle("ClawHark")
+        return Notification.Builder(this, CHANNEL_ID).setContentTitle(getString(R.string.app_name))
             .setContentText(message).setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(open).setOngoing(requested).build()
     }
