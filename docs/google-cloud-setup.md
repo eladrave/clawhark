@@ -17,33 +17,33 @@ The owner approved Google's required User Data Policy agreement. A live device-a
 
 ## Personal APK
 
-The current configured APK is **Rave-AI-1.2.0-watch.apk**, compiled from code revision `6fdf06fd48c49d56806ca0ec5c818d10eb915d76` with a private, ignored `app/src/main/assets/oauth_config.json`.
+The current configured APK is **Rave-AI-1.3.0-watch.apk**, compiled from code revision `90086f6aaa4a7996db0ffa3f3fa7e56b641f4a26` with a private, ignored `app/src/main/assets/oauth_config.json`.
 
-[Download the configured APK](https://chatgpt.com/library?file_id=libfile_40dc20867ee081919668f9ebe6bd9d2c&account_id=personal)
+[Download the configured APK](https://chatgpt.com/library?file_id=libfile_d84671e443cc8191b3a6202c513050b8&account_id=personal)
 
 - Android debug build for physical-device qualification, signed with the dedicated **Rave AI Personal Build** key.
-- Android unit tests: 39 passed, 0 failures or errors. The 13 host recording-store recovery tests also passed, including buffered PCM checkpoint/close recovery. Coverage includes tile visibility/coalescing, disk reservation, diagnostic batching/quota, batched Drive IDs and account changes, plus the existing speech/login/upload protocol tests.
+- Android unit tests: 47 passed, 0 failures or errors. The 13 host recording-store recovery tests also passed, including buffered PCM checkpoint/close recovery. Coverage includes guarded manual sync and stale grants, selected upload content, reduced diagnostic evidence, paused upload/token behavior, tile visibility/coalescing, disk reservation, diagnostic batching/quota, batched Drive IDs and account changes, plus the existing speech/login/upload protocol tests.
 - Debug APK build and lint: passed.
 - APK signature and ZIP alignment: verified.
 - Packaged app label: **Rave AI**.
 - Packaged OAuth configuration: verified against the newly created client; no user access tokens, refresh tokens, or signing keys are embedded.
-- APK SHA-256: `67fea40acef40e1301c67aa36bc39ea2eba543ff6cf22fd22a23a2dac1c7ba7d`.
+- APK SHA-256: `4ad66eb029bba7d1675d97bcd682d9ebf64945c4557f8fac9a64d4b35149f254`.
 
 The user installed 1.0.0 and supplied screenshots showing Google web approval succeeded while the watch remained on the code/link screen. Source inspection found that Activity.onStop canceled polling without persisting or resuming the pending grant. Version 1.0.1 persists the pending grant in encrypted preferences and resumes polling on return or Activity/process recreation. It retains server pacing and retries transient failures. Token storage and clearing of the pending grant are synchronous and atomic. Linking does not start the microphone.
 
-Install 1.2.0 **over the existing app**, preserving data and signing identity: `adb install -r Rave-AI-1.2.0-watch.apk`. Its version code is 4. Do not uninstall or clear storage. A working Drive link requires no new consent. The owner confirmed the earlier linking fix and real recording uploads.
+Install 1.3.0 **over the existing app**, preserving data and signing identity: `adb install -r Rave-AI-1.3.0-watch.apk`. Its version code is 5. Do not uninstall or clear storage. A working Drive link requires no new consent. The owner confirmed the earlier linking fix and real recording uploads.
 
-The app creates a **Rave AI** folder in the root of that linked account's Drive on its first upload. Audio remains local until a matching cloud ID, size, and checksum are verified. The user reports successful Drive linking and real file uploads following the 1.0.1 fix. Uploaded 1.1 diagnostics now show speech-only capture and real log uploads. The 1.2 changes, long screen-off continuity, interruptions and battery savings still need physical-device qualification. See [recorder-qualification.md](recorder-qualification.md).
+The app creates a **Rave AI** folder in the root of that linked account's Drive on its first upload. Audio remains local until a matching cloud ID, size, and checksum are verified. The user reports successful Drive linking and real file uploads following the 1.0.1 fix. Uploaded 1.1 diagnostics now show speech-only capture and real log uploads. Version 1.2 diagnostics show capture and verified uploads, but do not establish a battery improvement. Version 1.3 runtime trial controls, long screen-off continuity, interruptions and battery savings still need physical-device qualification. See [recorder-qualification.md](recorder-qualification.md).
 
 ## Current feature setup and validation
 
-Install 1.2.0 over the existing app. Existing working Drive authorization and recordings are preserved; there is no need to relink a working account. The earlier 1.0.0-to-1.0.1 fresh-code requirement is historical.
+Install 1.3.0 over the existing app. Existing working Drive authorization and recordings are preserved; there is no need to relink a working account. The earlier 1.0.0-to-1.0.1 fresh-code requirement is historical.
 
 - Add **Rave AI status** in the watch's tile picker. Status, battery/charging, current mode, pending recordings and a timestamp are shown. The tile opens the recorder. Cached active status has an explicit two-minute timeline expiry to CHECK RECORDER; updates are best effort.
-- Use **SETTINGS** for Speech only (beta), sensitivity, opt-in logging, upload timing, unmetered-only uploads and SYNC NOW. Recording mode/sensitivity apply on the next capture start. Defaults preserve continuous recording with immediate uploads, allow metered connections, and leave diagnostics off.
+- Use **SETTINGS** for battery-test presets and BEGIN/END markers, Speech only (beta), sensitivity, opt-in logging and detail, live tile updates, upload timing/content, unmetered-only uploads and SYNC NOW. Recording mode/sensitivity apply on the next capture start. Defaults preserve continuous recording with immediate uploads, allow metered connections, and leave diagnostics off.
 - Speech mode uses the pinned WebRTC GMM detector locally with up to one second of buffered context and two seconds of trailing audio. It still keeps the microphone active. Native detector failure falls back to storing audio and is surfaced in status. Soft/distant voices and TV/noise performance need watch qualification; no battery saving claim is made.
 - Enabling logs writes dated action/battery batches and uploads them to **Rave AI/logs**. Every action includes battery state; battery changes and five-minute active samples are included. Logs have a 20 MiB local limit, retain unuploaded batches, and use the same stable ID/size/MD5 acknowledgment as recordings. Disabling logging pauses new diagnostics and log uploads.
-- Upload timing offers Immediate, Every 15 minutes, or While charging. Batched mode skips per-segment upload kicks and relies on the periodic queue; SYNC NOW bypasses batching but preserves charging/unmetered constraints. Charging mode keeps the network queue constrained until charging. Reconfiguring upload preferences cancels the old immediate pass, preserving stable file IDs and verified cleanup. These modes can reduce radio wakes but do not suspend microphone capture.
+- Upload timing offers Immediate, Every 15/30/60 minutes, While charging, and Manual only. Upload content can be Audio and logs, Logs only, or Audio only. Excluded files remain local. SYNC NOW bypasses the interval/manual-only choice but preserves content, logging, charging and unmetered constraints. Reconfiguring upload preferences or starting a test invalidates stale manual requests; current requests may finish. No battery reduction is established. See [battery-testing.md](battery-testing.md).
 - New recording names include watch-local date/time, milliseconds, numeric UTC offset and a unique suffix. Existing pending names/IDs are preserved.
 
 The user observed a battery drop from 76% to 69% during the prior continuous/immediate recording trial. Exact elapsed time and idle drain were not recorded. This observation does not isolate the app's share of whole-watch power use. Use timestamped diagnostic logs and comparable screen-off trials to compare upload policies, then speech-only mode; battery benefit is not yet measured.
@@ -53,6 +53,10 @@ APK validation includes matching the existing signing certificate, package versi
 ## Version 1.2 comparison
 
 This release adds the Rave AI pulse/memory logo, coalesced PCM writes, ten-second reserved storage checks, batched diagnostic syncs, visibility-aware tile refresh, lifecycle-scoped screen polling and finite uploader sessions with batched ID allocation. Every log line carries the app version; capture and upload counters aid comparison. Routine diagnostics can lose up to about 30 seconds since the last sync on hard power loss, while audio retains its approximately one-second sync cadence. WAV, microphone capture, speech sensitivity and existing upload preferences are retained. No measured battery improvement is claimed. See [battery-1.2.md](battery-1.2.md) for the comparison procedure.
+
+## Version 1.3 controlled trials
+
+Runtime presets isolate automatic upload cost without replacing the APK. BEGIN and END markers carry a unique test ID, battery, actual capture mode and selected settings. The Capture only preset stores audio and diagnostics locally until an explicit sync. Reduced logging detail and routine tile updates are independent controls, so subsequent trials can change one setting at a time. START enables logging and marks an existing capture session; END TEST & SYNC ends the marked interval and syncs selected content, while recording continues until STOP. Presets change timing/content only. Existing preferences are preserved on upgrade. See [battery-testing.md](battery-testing.md) for the one-hour comparison procedure.
 
 ## Private configuration and future updates
 
