@@ -136,13 +136,21 @@ class RecordingService : Service() {
             var checkpointAt = SystemClock.elapsedRealtime()
             var lastReadAt = checkpointAt
             var lastStatusAt = checkpointAt
+            val captureAt = checkpointAt
+            val cpuAt = Process.getElapsedCpuTime()
+            var inputSamples = 0L
+            var storedSamples = 0L
+            val space = CaptureSpaceBudget { store.checkSpace(it) }
             var recoveryAttempt = 0
             fun seal() {
-                segment?.seal()?.also { totalChunks++ }
+                val sealed = segment?.seal()
+                if (sealed != null) totalChunks++
                 segment = null
-                UploadWorker.kick(this@RecordingService)
+                if (sealed != null) UploadWorker.kick(this@RecordingService)
             }
             fun append(input: ShortArray, length: Int, at: Long) {
+                val now = SystemClock.elapsedRealtime()
+                space.beforeAppend(now, length * 2)
                 if (segment == null) { segment = store.begin(at); checkpointAt = SystemClock.elapsedRealtime() }
                 for (i in 0 until length) {
                     pcm[2 * i] = input[i].toByte()
@@ -150,9 +158,9 @@ class RecordingService : Service() {
                 }
                 val current = checkNotNull(segment)
                 current.append(pcm, length * 2)
-                val now = SystemClock.elapsedRealtime()
+                storedSamples += length
                 if (now - checkpointAt >= 1000) {
-                    current.checkpoint(); store.checkSpace(SAMPLE_RATE * 2L); checkpointAt = now
+                    current.checkpoint(); checkpointAt = now
                 }
                 if (current.payloadBytes() >= SEGMENT_BYTES) seal()
             }
@@ -168,6 +176,7 @@ class RecordingService : Service() {
                 } catch (_: Exception) { vadFallback = true; speechOnly = false; AppLog.w("VAD", "Cannot initialize; saving all audio") }
                   catch (_: LinkageError) { vadFallback = true; speechOnly = false; AppLog.w("VAD", "Native detector unavailable; saving all audio") }
             }
+            AppLog.i("Profile", "Capture start; mode=${modeLabel()}; sensitivity=${AppSettings.sensitivity(this@RecordingService)}; upload_timing=${AppSettings.uploadTiming(this@RecordingService)}; unmetered=${AppSettings.unmetered(this@RecordingService)}; pcm_hz=$SAMPLE_RATE; read_samples=$BUFFER_SAMPLES")
 
             while (requested && currentCoroutineContext().isActive) {
                 if (recorder == null) {
@@ -211,12 +220,13 @@ class RecordingService : Service() {
                 capturing = true
                 if (resumed) notifyState(if (speechOnly) "Listening for speech" else "Recording. Audio saved on watch.")
                 val at = System.currentTimeMillis() - read * 1000L / SAMPLE_RATE
+                inputSamples += read
                 if (gate != null) gate.accept(samples, read, at) else append(samples, read, at)
-                if (now - lastStatusAt >= 30_000) {
+                if (now - lastStatusAt >= 60_000) {
                     notifyState(if (isListening()) "Listening for speech. ${store.pending().size} files pending"
                         else "Recording. ${store.pending().size} files awaiting upload")
                     lastStatusAt = now
-                    AppLog.i("Service", "Capture active; pending=${store.pending().size}; bytes=${store.bytesUsed()}")
+                    AppLog.i("Service", "Capture active; mode=${modeLabel()}; elapsed_ms=${now - captureAt}; input_ms=${inputSamples * 1000 / SAMPLE_RATE}; stored_ms=${storedSamples * 1000 / SAMPLE_RATE}; process_cpu_ms=${Process.getElapsedCpuTime() - cpuAt}; pending=${store.pending().size}; bytes=${store.bytesUsed()}")
                 }
             }
         } catch (e: CancellationException) {

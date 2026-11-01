@@ -19,17 +19,18 @@ class DriveUploaderTest {
         override fun getResponseCode(): Int { if (reply.timeout) throw SocketTimeoutException("response lost"); return reply.code }
         override fun getInputStream(): InputStream = ByteArrayInputStream(reply.body.toByteArray())
     }
-    private class Fixture {
+    private class Fixture(batchSize: Int = 1) {
         val store = RecordingStore(Files.createTempDirectory("upload-test").toFile())
         val audio = store.begin(123).let { it.append(ByteArray(3200) { n -> n.toByte() }, 3200); it.seal() }
         val replies = ArrayDeque<Reply>()
         val requests = mutableListOf<Fake>()
-        val uploader = DriveUploader(store, { "synthetic-test-token" }, { url ->
+        var token = "synthetic-test-token"
+        val uploader = DriveUploader(store, { token }, { url ->
             assertTrue("Unexpected request: $url", replies.isNotEmpty())
             val reply = replies.removeFirst()
             assertTrue("Expected ${reply.match}, got $url", url.contains(reply.match))
             Fake(reply, url).also { requests.add(it) }
-        })
+        }, idBatchSize = batchSize)
         fun account() { replies.add(Reply("/about?", 200, """{"user":{"permissionId":"owner"}}""")) }
         fun remote(md5: String = RecordingStore.digest(audio, "MD5")): String =
             """{"id":"stable_id","size":"${audio.length()}","md5Checksum":"$md5","trashed":false}"""
@@ -45,7 +46,6 @@ class DriveUploaderTest {
         assertNull(f.uploader.uploadFile(f.audio))
         assertTrue(f.audio.exists())
         assertEquals("stable_id",f.store.readDriveId(f.audio))
-        f.account()
         f.replies.add(Reply("/files/stable_id?",200,f.remote()))
         val copy = f.uploader.uploadFile(f.audio)
         assertNotNull(copy)
@@ -81,6 +81,44 @@ class DriveUploaderTest {
         val f=Fixture(); f.store.bindCloudOwner("another_owner"); f.account()
         assertNull(f.uploader.uploadFile(f.audio)); assertTrue(f.audio.exists())
         assertEquals(1,f.requests.size)
+    }
+    @Test fun onePassSharesAccountCheckAndIdAllocationWithoutSkippingVerification() = runBlocking {
+        val f = Fixture(2)
+        val second = f.store.begin(124).let { it.append(ByteArray(3200) { n -> n.toByte() }, 3200); it.seal() }
+        f.account()
+        f.replies.add(Reply("generateIds?count=2",200,"""{"ids":["stable_id","second_id"]}"""))
+        f.replies.add(Reply("/files/stable_id?",404,""))
+        f.replies.add(Reply("/files?q=",200,"""{"files":[{"id":"folder"}]}"""))
+        f.replies.add(Reply("multipart",200,"""{"id":"stable_id"}"""))
+        f.replies.add(Reply("/files/stable_id?",200,f.remote()))
+        f.replies.add(Reply("/files/second_id?",404,""))
+        f.replies.add(Reply("multipart",200,"""{"id":"second_id"}"""))
+        f.replies.add(Reply("/files/second_id?",200,f.remote().replace("stable_id", "second_id")))
+        assertNotNull(f.uploader.uploadFile(f.audio))
+        assertNotNull(f.uploader.uploadFile(second))
+        assertEquals(1,f.requests.count { it.url.toString().contains("/about?") })
+        assertEquals(1,f.requests.count { it.url.toString().contains("generateIds") })
+        assertEquals(4,f.requests.count { it.requestMethod == "GET" && Regex("/files/(stable_id|second_id)\\?").containsMatchIn(it.url.toString()) })
+        assertEquals(9,f.uploader.requestCount)
+        assertTrue(f.audio.exists() && second.exists())
+    }
+    @Test fun aChangedTokenMustProveOwnerBeforeAnyCachedIdentityIsUsed() = runBlocking {
+        val f = Fixture(); f.store.saveDriveId(f.audio,"stable_id"); f.account()
+        f.replies.add(Reply("/files/stable_id?",200,f.remote()))
+        assertNotNull(f.uploader.uploadFile(f.audio))
+        f.token = "synthetic-other-account"
+        f.replies.add(Reply("/about?",200,"""{"user":{"permissionId":"different_owner"}}"""))
+        assertNull(f.uploader.uploadFile(f.audio))
+        assertEquals(3,f.requests.size)
+        assertTrue(f.audio.exists())
+    }
+    @Test fun malformedIdPoolCannotPublishTwoRecordingsUnderOneId() = runBlocking {
+        val f = Fixture(2); f.account()
+        f.replies.add(Reply("generateIds",200,"""{"ids":["duplicate","duplicate"]}"""))
+        assertNull(f.uploader.uploadFile(f.audio))
+        assertEquals(0,f.requests.count { it.requestMethod == "POST" })
+        assertNull(f.store.readDriveId(f.audio))
+        assertTrue(f.audio.exists())
     }
     @Test fun diagnosticsAreCreatedInsideTheLogsChildAndRemainUntilAcknowledged() = runBlocking {
         val store = RecordingStore(Files.createTempDirectory("log-upload-test").toFile())

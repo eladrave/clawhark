@@ -1,6 +1,6 @@
 # Recorder qualification: Pixel Watch 5
 
-Target device reported by owner: Google Pixel Watch 5. Record exact watch size, Wear OS/Android build, free storage, Wi-Fi/LTE state and battery baseline before testing. Published product details do not establish the installed OS build.
+Target device reported by owner: Google Pixel Watch 5. Record exact watch size, Wear OS/Android build, free storage, Wi-Fi/LTE state and battery baseline before testing. Published product details do not establish the installed OS build. For the 1.2 comparison build, follow [battery-1.2.md](battery-1.2.md), including its two-minute tile expiry and version-tagged diagnostics.
 
 ## Acceptance sequence
 

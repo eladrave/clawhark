@@ -149,6 +149,8 @@ public final class RecordingStore {
         private final File target;
         private final File partial;
         private final RandomAccessFile file;
+        private final byte[] writeBuffer = new byte[8192];
+        private int buffered;
         private long bytes;
         private boolean closed;
         private Segment(File target) throws IOException {
@@ -163,24 +165,41 @@ public final class RecordingStore {
             if (closed) throw new IOException("Segment is closed");
             if (length < 0 || length > data.length || (length & 1) != 0) throw new IllegalArgumentException("PCM16 alignment");
             // Space is checked by the capture loop at each durability checkpoint.
-            file.seek(44 + bytes);
-            file.write(data, 0, length);
+            int offset = 0;
+            while (offset < length) {
+                int count = Math.min(length - offset, writeBuffer.length - buffered);
+                System.arraycopy(data, offset, writeBuffer, buffered, count);
+                buffered += count;
+                offset += count;
+                if (buffered == writeBuffer.length) flushBuffered();
+            }
             bytes += length;
+        }
+        private void flushBuffered() throws IOException {
+            if (buffered == 0) return;
+            file.write(writeBuffer, 0, buffered);
+            buffered = 0;
         }
         public void checkpoint() throws IOException {
             if (closed) throw new IOException("Segment is closed");
+            flushBuffered();
             file.getFD().sync();
         }
         public File seal() throws IOException {
             if (closed) throw new IOException("Segment is closed");
-            try { header(file, bytes); file.getFD().sync(); }
+            try { flushBuffered(); header(file, bytes); file.getFD().sync(); }
             finally { closed = true; file.close(); }
             if (target.exists() || !partial.renameTo(target)) throw new IOException("Cannot publish audio segment");
             syncDirectory(dir);
             return target;
         }
         /** Close without deleting. Startup repairs the header and publishes all complete samples. */
-        public void close() throws IOException { if (!closed) { closed = true; file.close(); } }
+        public void close() throws IOException {
+            if (!closed) {
+                try { flushBuffered(); }
+                finally { closed = true; file.close(); }
+            }
+        }
     }
 
     private static boolean validHeader(RandomAccessFile file) throws IOException {

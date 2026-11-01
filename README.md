@@ -20,11 +20,15 @@ WAV costs about **115 MB/hour, 2.76 GB/day** of continuous recording, plus heade
 
 ## Rave AI 1.1 controls
 
-- Add **Rave AI status** using the watch's tile picker. It shows recording/listening/stopped status, battery, mode, pending recordings, and a status timestamp. Tap the tile to open the recorder. Updates are best effort; cached active status expires to CHECK RECORDER after a minute.
+- Add **Rave AI status** using the watch's tile picker. It shows recording/listening/stopped status, battery, mode, pending recordings, and a status timestamp. Tap the tile to open the recorder. Version 1.2 refreshes on tile entry, coalesces visible updates, and suppresses routine hidden-tile requests. Cached active status expires to CHECK RECORDER after two minutes.
 - The app has a **SETTINGS** button. Continuous mode remains the default. To try **Speech only (beta)**, select it and restart capture. Sensitivity also applies on the next capture start. Quiet speech may be missed; TV speech can trigger recording. The microphone and CPU still listen, so battery savings are not promised.
 - Battery appears in both the app and tile, including charging state.
 - **Enable logging** is off by default. When on, app actions include battery levels; battery changes and 5-minute samples are recorded while the app/recorder is active. Immutable log batches upload to **Rave AI/logs** with ID/size/checksum verification before local cleanup. Logging has a 20 MiB budget plus the same free-space reserve as recordings, and stops writing at its limit instead of deleting unuploaded logs. Turning logging off pauses new diagnostics and log uploads, preserving queued logs.
 - **Upload timing** offers Immediate (the existing default), Every 15 minutes, or While charging. Batching/charging can reduce radio wakes while local files remain protected. **Unmetered uploads only** applies to recordings and logs. **SYNC NOW** bypasses batching but still respects charging/unmetered constraints. None of these options suspends the microphone; actual battery benefit needs measurement.
+
+### Version 1.2 battery comparison build
+
+Version 1.2.0 adds the Rave AI pulse/memory logo and reduces file, diagnostic, tile and upload overhead. See [battery changes and comparison procedure](docs/battery-1.2.md). WAV format, microphone capture, speech detection, upload preferences and verified cleanup remain compatible. Every log line includes the app version; capture summaries report input/stored durations and process CPU time, and upload summaries report elapsed time, verified bytes and HTTP request counts. Actual battery improvement is not yet measured.
 - New recording names include the watch's local date, time, milliseconds, numeric UTC offset, and unique suffix: `RaveAI_2026-11-01_11-42-18-123_-0500_<uuid>.wav`. Existing pending recordings keep their names and upload identities.
 
 WebRTC native release provenance and included licenses are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Omi uses Silero in software and dedicated activity detection on some hardware. No Omi implementation code is copied; a generic watch app cannot assume access to that dedicated hardware.

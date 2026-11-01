@@ -9,19 +9,27 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.UUID
+import java.util.ArrayDeque
 
 /** Stable Drive IDs survive ambiguous POST responses. A 2xx response alone is never a receipt. */
 class DriveUploader(
     private val store: RecordingStore,
     private val tokenProvider: suspend () -> String? = { AuthManager.getAccessToken() },
     private val openConnection: (String) -> HttpURLConnection = { URL(it).openConnection() as HttpURLConnection },
-    private val ownerStore: RecordingStore = store
+    private val ownerStore: RecordingStore = store,
+    idBatchSize: Int = 1
 ) {
     data class VerifiedCopy(val id: String, val size: Long, val md5: String)
     private val folders = mutableMapOf<String, String>()
+    private val idCount = idBatchSize.coerceIn(1, 32)
+    private val availableIds = ArrayDeque<String>()
+    private var verifiedToken: String? = null
+    var requestCount = 0
+        private set
 
     private fun connection(url: String, token: String, method: String = "GET"): HttpURLConnection =
         openConnection(url).apply {
+            requestCount++
             requestMethod = method
             setRequestProperty("Authorization", "Bearer $token")
             connectTimeout = 30_000
@@ -57,10 +65,33 @@ class DriveUploader(
 
     private fun allocateId(file: File, token: String): String {
         store.readDriveId(file)?.let { store.saveDriveId(file, it); return it }
-        val conn = connection("https://www.googleapis.com/drive/v3/files/generateIds?count=1&space=drive&type=files", token)
-        val id = try { response(conn).getJSONArray("ids").getString(0) } finally { conn.disconnect() }
+        if (availableIds.isEmpty()) {
+            val conn = connection("https://www.googleapis.com/drive/v3/files/generateIds?count=$idCount&space=drive&type=files", token)
+            val ids = try { response(conn).getJSONArray("ids") } finally { conn.disconnect() }
+            check(ids.length() in 1..idCount) { "Invalid Drive ID batch" }
+            val batch = (0 until ids.length()).map { ids.getString(it) }
+            check(batch.all { it.isNotBlank() } && batch.distinct().size == batch.size) { "Invalid Drive IDs" }
+            availableIds.addAll(batch)
+        }
+        val id = availableIds.removeFirst()
         store.saveDriveId(file, id) // synced before making the first mutating network request
         return id
+    }
+
+    private fun verifyOwner(token: String) {
+        if (verifiedToken == token) return
+        // The cache is scoped to this finite upload pass AND exact access token. A refreshed or
+        // changed token must prove its account before any stored ID or cached folder is reused.
+        verifiedToken = null
+        availableIds.clear()
+        folders.clear()
+        val account = connection("https://www.googleapis.com/drive/v3/about?fields=user(permissionId)", token)
+        try {
+            val owner = response(account).getJSONObject("user").getString("permissionId")
+            ownerStore.bindCloudOwner(owner)
+            store.bindCloudOwner(owner)
+            verifiedToken = token
+        } finally { account.disconnect() }
     }
 
     private fun inspect(id: String, token: String): JSONObject? {
@@ -73,13 +104,7 @@ class DriveUploader(
     suspend fun uploadFile(file: File, logFile: Boolean = false): VerifiedCopy? = withContext(Dispatchers.IO) {
         val token = tokenProvider() ?: return@withContext null
         try {
-            val account = connection("https://www.googleapis.com/drive/v3/about?fields=user(permissionId)", token)
-            try {
-                val owner = response(account).getJSONObject("user").getString("permissionId")
-                ownerStore.bindCloudOwner(owner)
-                store.bindCloudOwner(owner)
-            }
-            finally { account.disconnect() }
+            verifyOwner(token)
             check(file.isFile && file.length() > 0) { "Local recording missing or empty" }
             val localSize = file.length()
             val localMd5 = RecordingStore.digest(file, "MD5")

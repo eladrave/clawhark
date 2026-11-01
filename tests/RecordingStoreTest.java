@@ -33,6 +33,18 @@ public final class RecordingStoreTest {
             check(Arrays.equals(Arrays.copyOfRange(bytes,44,bytes.length),audio()), "PCM changed");
             check(s.pending().size() == 1, "Not pending");
         });
+        test("20ms speech frames coalesce and checkpoint flushes exact bytes", () -> {
+            RecordingStore s = store(); byte[] frame = Arrays.copyOf(audio(), 640);
+            try (RecordingStore.Segment segment = s.begin(1)) {
+                for (int i=0;i<12;i++) segment.append(frame, frame.length);
+                File part = s.directory().listFiles((d,n)->n.endsWith(".part"))[0];
+                check(part.length()==44,"Tiny frames were not buffered");
+                check(segment.payloadBytes()==7680,"Buffered bytes not accounted");
+                segment.checkpoint(); check(part.length()==7724,"Checkpoint did not flush");
+                segment.append(frame,frame.length);
+            }
+            s.recover(); check(s.pending().get(0).length()==8364,"Close/recovery lost final buffered frame");
+        });
         test("abrupt process death recovers exact audio and releases lock", () -> {
             RecordingStore s = store();
             Process child = new ProcessBuilder(System.getProperty("java.home") + "/bin/java", "-cp", System.getProperty("java.class.path"),

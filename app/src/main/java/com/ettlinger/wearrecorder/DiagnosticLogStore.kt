@@ -10,14 +10,23 @@ class DiagnosticLogStore(
     private val store: RecordingStore,
     private val budget: Long = 20L * 1024 * 1024,
     private val chunkSize: Long = 256 * 1024,
-    private val reserve: Long = RecordingStore.FREE_RESERVE
+    private val reserve: Long = RecordingStore.FREE_RESERVE,
+    private val syncOutput: (FileOutputStream) -> Unit = { it.fd.sync() }
 ) {
     private var active: File? = null
+    private var output: FileOutputStream? = null
     private var openedAt = 0L
-    init { store.recoverLogs() }
-    @Synchronized fun append(line: String, now: Long) {
+    private var syncedAt = 0L
+    private var countedAt = 0L
+    private var bytesUsed = 0L
+    init { store.recoverLogs(); bytesUsed = store.bytesUsed() }
+    @Synchronized fun append(line: String, now: Long, important: Boolean = false) {
         val bytes = (line + "\n").toByteArray(Charsets.UTF_8)
-        check(store.bytesUsed() + bytes.size <= budget && store.directory().usableSpace >= reserve + bytes.size) {
+        // Reconcile deletions by the uploader, without scanning the directory for every line.
+        if (now - countedAt >= 30_000 || now < countedAt || bytesUsed + bytes.size > budget) {
+            bytesUsed = store.bytesUsed(); countedAt = now
+        }
+        check(bytesUsed + bytes.size <= budget && store.directory().usableSpace >= reserve + bytes.size) {
             "Diagnostic log limit reached; existing logs retained"
         }
         if (active != null && (active!!.length() + bytes.size > chunkSize || now - openedAt >= 5 * 60_000)) seal()
@@ -25,10 +34,23 @@ class DiagnosticLogStore(
             val date = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.ROOT).format(Date(now))
             active = File(store.directory(), "RaveAI_log_${date}_${UUID.randomUUID()}.log.part")
             openedAt = now
+            syncedAt = now
+            output = FileOutputStream(active!!, true)
         }
-        FileOutputStream(active!!, true).use { it.write(bytes); it.fd.sync() }
+        // Writes go to the OS immediately. Only diagnostics relax hard-power-loss durability to 30s.
+        checkNotNull(output).write(bytes)
+        bytesUsed += bytes.size
+        if (important || now - syncedAt >= 30_000 || now < syncedAt) checkpoint(now)
     }
-    @Synchronized fun seal() { active?.let { store.sealLog(it) }; active = null }
+    @Synchronized fun checkpoint(now: Long) {
+        output?.let { syncOutput(it); syncedAt = now }
+    }
+    @Synchronized fun seal() {
+        val part = active ?: return
+        output?.close(); output = null
+        store.sealLog(part) // sync data, rename, sync directory before exposing to uploads
+        active = null
+    }
     companion object {
         fun redact(text: String): String = text
             .replace(Regex("(?i)Bearer\\s+[^\\s,;]+"), "Bearer [redacted]")

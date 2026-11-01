@@ -16,6 +16,7 @@ class MainActivity : Activity() {
     private var bound = false
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var authJob: Job? = null
+    private var uiJob: Job? = null
     private var visible = false
     private var startAfterPermission = false
     private lateinit var toggleBtn: Button
@@ -81,20 +82,19 @@ class MainActivity : Activity() {
             authGroup.visibility = View.VISIBLE
             recordGroup.visibility = View.GONE
         }
-        scope.launch {
-            while (isActive) {
-                if (visible) {
-                    updateUI()
-                    if (authJob?.isActive != true && AuthManager.pendingDeviceLink() != null) linkDrive(false)
-                }
-                delay(1000)
-            }
-        }
     }
 
     override fun onStart() {
         super.onStart()
         visible = true
+        uiJob?.cancel()
+        uiJob = scope.launch {
+            while (isActive) {
+                updateUI()
+                if (authJob?.isActive != true && AuthManager.pendingDeviceLink() != null) linkDrive(false)
+                delay(5000)
+            }
+        }
         AppLog.i("UI", "Recorder screen opened")
         bound = bindService(Intent(this, RecordingService::class.java), connection, BIND_AUTO_CREATE)
         if (AuthManager.pendingDeviceLink() != null) linkDrive(false)
@@ -104,9 +104,9 @@ class MainActivity : Activity() {
     }
     override fun onStop() {
         visible = false
+        uiJob?.cancel(); uiJob = null
         AppLog.i("UI", "Recorder screen hidden")
-        AppLog.flush()
-        if (AppSettings.logging(this)) UploadWorker.kick(this)
+        AppLog.checkpoint()
         // Pause network polling, but retain the encrypted grant for onStart/process recreation.
         authJob?.cancel()
         if (bound) { unbindService(connection); bound = false; service = null }

@@ -15,6 +15,8 @@ import java.util.*
 
 /** Local snapshots only. A timeline expires cached active status even if the process cannot refresh. */
 class StatusTileService : TileService() {
+    override fun onTileEnterEvent(eventParams: EventBuilders.TileEnterEvent) { RecorderStatus.tileVisible(this, true) }
+    override fun onTileLeaveEvent(eventParams: EventBuilders.TileLeaveEvent) { RecorderStatus.tileVisible(this, false) }
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<TileBuilders.Tile> {
         val state = RecorderStatus.state(this)
         val pending = try { RecordingFiles.open(this).pending().size } catch (_: Exception) { -1 }
@@ -44,9 +46,9 @@ class StatusTileService : TileService() {
         }
         val active = state in listOf("RECORDING", "LISTENING", "RECOVERING MIC", "STARTING")
         val timeline = TileTimeline.build(layout(state), layout("CHECK RECORDER"), active,
-            minOf(at + 60_000L, System.currentTimeMillis() + 60_000L))
+            minOf(at + 120_000L, System.currentTimeMillis() + 120_000L))
         return Futures.immediateFuture(TileBuilders.Tile.Builder().setResourcesVersion("1")
-            .setFreshnessIntervalMillis(60_000).setTileTimeline(timeline).build())
+            .setFreshnessIntervalMillis(2 * 60 * 60_000L).setTileTimeline(timeline).build())
     }
     override fun onTileResourcesRequest(requestParams: RequestBuilders.ResourcesRequest): ListenableFuture<ResourceBuilders.Resources> =
         Futures.immediateFuture(ResourceBuilders.Resources.Builder().setVersion("1").build())

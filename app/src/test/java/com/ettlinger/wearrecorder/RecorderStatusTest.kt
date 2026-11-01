@@ -5,7 +5,7 @@ import org.junit.Test
 
 class RecorderStatusTest {
     @Test fun staleOrPreviousBootHeartbeatCannotClaimRecording() {
-        assertEquals("CHECK RECORDER", RecorderStatus.displayState("RECORDING", 60_001))
+        assertEquals("CHECK RECORDER", RecorderStatus.displayState("RECORDING", 120_001))
         assertEquals("CHECK RECORDER", RecorderStatus.displayState("LISTENING", -10))
         assertEquals("LISTENING", RecorderStatus.displayState("LISTENING", 25_000))
     }

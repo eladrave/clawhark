@@ -1,6 +1,7 @@
 package com.ettlinger.wearrecorder
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.work.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -54,12 +55,18 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     status("Link Drive to upload. Audio retained.")
                     return@withContext Result.success()
                 }
-                val uploader = DriveUploader(store)
+                val startedAt = SystemClock.elapsedRealtime()
+                val pending = store.pending()
+                val uploader = DriveUploader(store, idBatchSize = pending.size)
                 var failed = false
                 var consecutiveFailures = 0
-                for (file in store.pending()) {
+                var verified = 0
+                var verifiedBytes = 0L
+                var logRequests = 0
+                AppLog.i("Upload", "Batch start; audio=${pending.size}; timing=${AppSettings.uploadTiming(applicationContext)}; unmetered=${AppSettings.unmetered(applicationContext)}")
+                for ((index, file) in pending.withIndex()) {
                     if (isStopped) return@withContext Result.retry()
-                    status("Uploading ${store.pending().size} saved files")
+                    status("Uploading batch ${index + 1}/${pending.size}")
                     val copy = uploader.uploadFile(file)
                     if (copy == null) {
                         status("Upload pending. Audio retained; will retry.")
@@ -70,20 +77,24 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     }
                     consecutiveFailures = 0
                     store.acknowledge(file, copy.id, copy.size, copy.md5)
+                    verified++; verifiedBytes += copy.size
                 }
                 if (AppSettings.logging(applicationContext)) {
                     AppLog.flush()
                     val logs = RecordingFiles.logs(applicationContext)
-                    val logUploader = DriveUploader(logs, ownerStore = store)
+                    val pendingLogs = logs.pendingLogs()
+                    val logUploader = DriveUploader(logs, ownerStore = store, idBatchSize = pendingLogs.size)
                     // A finite snapshot: logging this upload cannot grow the same upload pass forever.
-                    for (file in logs.pendingLogs()) {
+                    for (file in pendingLogs) {
                         if (isStopped) return@withContext Result.retry()
                         if (!AppSettings.logging(applicationContext)) break
                         val copy = logUploader.uploadFile(file, logFile = true)
                         if (copy == null) { failed = true; break }
                         logs.acknowledge(file, copy.id, copy.size, copy.md5)
                     }
+                    logRequests = logUploader.requestCount
                 }
+                AppLog.i("Upload", "Batch result; verified_audio=$verified; bytes=$verifiedBytes; elapsed_ms=${SystemClock.elapsedRealtime() - startedAt}; http=${uploader.requestCount + logRequests}; remaining=${store.pending().size}; retry=$failed")
                 if (failed) {
                     status("Uploads pending. Local files retained; will retry.")
                     Result.retry()

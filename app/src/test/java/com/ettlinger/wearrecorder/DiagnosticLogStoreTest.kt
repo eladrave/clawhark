@@ -6,6 +6,25 @@ import java.nio.file.Files
 
 class DiagnosticLogStoreTest {
     private fun spool() = RecordingStore(Files.createTempDirectory("diagnostic-test").toFile())
+    @Test fun routineLinesShareSyncButWarningsAndTimeBoundarySyncPromptly() {
+        var syncs = 0
+        val logs = DiagnosticLogStore(spool(), reserve = 0, syncOutput = { it.fd.sync(); syncs++ })
+        logs.append("first", 1000)
+        repeat(20) { logs.append("routine", 2000 + it.toLong()) }
+        assertEquals(0, syncs)
+        logs.append("periodic", 31_000); assertEquals(1, syncs)
+        logs.append("warning", 31_001, important = true); assertEquals(2, syncs)
+        logs.seal()
+    }
+    @Test fun quotaAccountingReconcilesVerifiedDeletions() {
+        val spool = spool(); val logs = DiagnosticLogStore(spool, budget = 20, reserve = 0)
+        logs.append("old retained", 1000); logs.seal()
+        val old = spool.pendingLogs().single()
+        spool.saveDriveId(old, "old_log")
+        spool.acknowledge(old, "old_log", old.length(), RecordingStore.digest(old, "MD5"))
+        logs.append("new retained", 2000); logs.seal()
+        assertEquals("new retained\n", spool.pendingLogs().single().readText())
+    }
     @Test fun mutableLogIsHiddenUntilSealedAndLaterWritesNeverChangeIt() {
         val spool = spool(); val logs = DiagnosticLogStore(spool, reserve = 0)
         logs.append("start battery=90", 1_000)
