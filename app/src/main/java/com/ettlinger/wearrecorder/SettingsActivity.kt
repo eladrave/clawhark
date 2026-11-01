@@ -60,13 +60,31 @@ class SettingsActivity : Activity() {
             if (enabled) { AppLog.i("Settings", "Logging enabled"); AppLog.flush(); UploadWorker.kick(this) }
             diagnosticStatus.text = "Diagnostics: ${if (enabled) AppLog.status else "Off"}"
         }
+        text("Upload timing")
+        val timing = Spinner(this).apply {
+            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf("Immediate", "Every 15 minutes", "While charging"))
+            setSelection(AppSettings.uploadTiming(this@SettingsActivity))
+        }
+        column.addView(timing)
+        timing.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (position != AppSettings.uploadTiming(this@SettingsActivity)) {
+                    AppSettings.setUploadTiming(this@SettingsActivity, position)
+                    AppLog.i("Settings", "Upload timing changed to $position")
+                    UploadWorker.reconfigure(this@SettingsActivity)
+                }
+            }
+        }
+        text("Batching reduces upload wakeups. While charging keeps files local until charging. SYNC NOW bypasses batching but respects charging and unmetered preferences.")
         val unmetered = Switch(this).apply { text = "Unmetered uploads only"; isChecked = AppSettings.unmetered(this@SettingsActivity) }
         column.addView(unmetered)
         text("When enabled, recordings and logs wait for an unmetered connection, usually Wi-Fi.")
         unmetered.setOnCheckedChangeListener { _, enabled ->
             AppSettings.set(this, AppSettings.UNMETERED, enabled)
             AppLog.i("Settings", "Unmetered upload preference changed to $enabled")
-            UploadWorker.schedule(this); UploadWorker.kick(this, true)
+            UploadWorker.reconfigure(this)
         }
         button("SYNC NOW") { AppLog.i("Settings", "Manual sync requested"); AppLog.flush(); UploadWorker.kick(this, true); Toast.makeText(this, "Sync queued", Toast.LENGTH_SHORT).show() }
         button("BACK") { finish() }

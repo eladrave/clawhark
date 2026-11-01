@@ -12,7 +12,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         const val PREF_STATUS = "upload_status"
         private const val IMMEDIATE = "upload_immediate"
         private fun constraints(c: Context) = Constraints.Builder().setRequiredNetworkType(
-            if (AppSettings.unmetered(c)) NetworkType.UNMETERED else NetworkType.CONNECTED).build()
+            if (AppSettings.unmetered(c)) NetworkType.UNMETERED else NetworkType.CONNECTED)
+            .setRequiresCharging(AppSettings.uploadTiming(c) == 2).build()
 
         fun schedule(context: Context) {
             val wm = WorkManager.getInstance(context)
@@ -21,7 +22,13 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 PeriodicWorkRequestBuilder<UploadWorker>(15, TimeUnit.MINUTES)
                     .setConstraints(constraints(context)).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
         }
+        fun reconfigure(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(IMMEDIATE)
+            schedule(context)
+            if (AppSettings.uploadTiming(context) != 1) kick(context, true)
+        }
         fun kick(context: Context, replace: Boolean = false) {
+            if (!replace && AppSettings.uploadTiming(context) == 1) return
             // Coalesce offline wakes instead of building thousands of jobs. The periodic pass covers snapshot races.
             WorkManager.getInstance(context).enqueueUniqueWork(IMMEDIATE, if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<UploadWorker>().setConstraints(constraints(context))
