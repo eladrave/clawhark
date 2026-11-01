@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,9 +28,9 @@ import java.net.URL
  *
  * Setup: Create an OAuth 2.0 client in Google Cloud Console:
  *   - Application type: "TVs and Limited Input devices"
- *   - No client_secret needed for this type
+ *   - Include the client ID and client secret in the private OAuth asset
  *   - Enable the Google Drive API for the project
- *   - Set CLIENT_ID below to your client ID
+ *   - Keep client configuration and user tokens out of Git
  */
 object AuthManager {
     private const val TAG = "Auth"
@@ -48,12 +49,16 @@ object AuthManager {
     private const val PREF_REFRESH_TOKEN = "refresh_token"
     private const val PREF_ACCESS_TOKEN = "access_token"
     private const val PREF_TOKEN_EXPIRY = "token_expiry"
+    private const val PREF_PENDING_LINK = "pending_device_link"
 
     private const val ENCRYPTED_PREFS_FILE = "clawhark_auth_enc"
     private const val OLD_PREFS_FILE = "clawhark_auth"
 
     private var prefs: SharedPreferences? = null
     private val tokenMutex = Mutex()
+    private val deviceRequestMutex = Mutex()
+    private val devicePollMutex = Mutex()
+    private val pendingLock = Any()
 
     fun init(context: Context) {
         if (prefs != null) return
@@ -128,7 +133,8 @@ object AuthManager {
     }
 
     fun clearAuth() {
-        requirePrefs().edit().clear().apply()
+        requirePrefs().edit().remove(PREF_REFRESH_TOKEN).remove(PREF_ACCESS_TOKEN)
+            .remove(PREF_TOKEN_EXPIRY).commit()
         AppLog.i(TAG, "Auth cleared")
     }
 
@@ -143,135 +149,158 @@ object AuthManager {
 
     // ─── Device Code Flow ────────────────────────────────────────────────
 
-    data class DeviceCodeResponse(
-        val deviceCode: String,
-        val userCode: String,
-        val verificationUrl: String,
-        val expiresIn: Int,
-        val interval: Int
-    )
-
-    sealed class PollResult {
-        data class Success(val accessToken: String) : PollResult()
-        object Pending : PollResult()
-        object SlowDown : PollResult()
-        object Expired : PollResult()
-        data class Error(val message: String) : PollResult()
+    fun pendingDeviceLink(): DeviceLinkSession? = synchronized(pendingLock) {
+        val value = requirePrefs().getString(PREF_PENDING_LINK, null) ?: return@synchronized null
+        try { DeviceLinkSession.decode(value) }
+        catch (_: Exception) {
+            requirePrefs().edit().remove(PREF_PENDING_LINK).commit()
+            null
+        }
     }
+
+    fun updatePendingDeviceLink(session: DeviceLinkSession): Boolean = synchronized(pendingLock) {
+        if (pendingDeviceLink()?.deviceCode != session.deviceCode) return@synchronized false
+        requirePrefs().edit().putString(PREF_PENDING_LINK, session.encode()).commit()
+    }
+
+    fun clearPendingDeviceLink(deviceCode: String) = synchronized(pendingLock) {
+        if (pendingDeviceLink()?.deviceCode == deviceCode)
+            requirePrefs().edit().remove(PREF_PENDING_LINK).commit()
+        Unit
+    }
+
+    fun deviceLinkPoller() = DeviceLinkPoller(::pendingDeviceLink, ::updatePendingDeviceLink,
+        ::clearPendingDeviceLink, ::pollForAuthorization)
 
     /**
      * Step 1: Request a device code from Google.
-     * Returns a DeviceCodeResponse with the user code to display on screen.
+     * Returns and durably saves the session before exposing a code to the screen.
      */
-    suspend fun requestDeviceCode(): DeviceCodeResponse? = withContext(Dispatchers.IO) {
-        AppLog.i(TAG, "Requesting device code...")
-        var conn: HttpURLConnection? = null
-        try {
-            conn = URL("https://oauth2.googleapis.com/device/code").openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.connectTimeout = CONNECT_TIMEOUT
-            conn.readTimeout = READ_TIMEOUT
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+    suspend fun requestDeviceCode(): DeviceLinkSession? = deviceRequestMutex.withLock {
+        withContext(Dispatchers.IO) {
+            pendingDeviceLink()?.let { if (it.expiresAt > System.currentTimeMillis()) return@withContext it }
+            AppLog.i(TAG, "Requesting device code...")
+            var conn: HttpURLConnection? = null
+            try {
+                conn = URL("https://oauth2.googleapis.com/device/code").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = CONNECT_TIMEOUT
+                conn.readTimeout = READ_TIMEOUT
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
 
-            val body = "client_id=$CLIENT_ID&scope=$SCOPE"
-            OutputStreamWriter(conn.outputStream).use { it.write(body) }
+                val body = "client_id=$CLIENT_ID&scope=$SCOPE"
+                OutputStreamWriter(conn.outputStream).use { it.write(body) }
 
-            val code = conn.responseCode
-            if (code == 200) {
-                val resp = conn.inputStream.bufferedReader().readText()
-                val json = JSONObject(resp)
-                val result = DeviceCodeResponse(
-                    deviceCode = json.getString("device_code"),
-                    userCode = json.getString("user_code"),
-                    verificationUrl = json.optString("verification_url", "https://www.google.com/device"),
-                    expiresIn = json.getInt("expires_in"),
-                    interval = json.getInt("interval")
-                )
-                AppLog.i(TAG, "Device authorization requested")
-                return@withContext result
-            } else {
-                AppLog.e(TAG, "Device code request failed HTTP $code")
+                val code = conn.responseCode
+                if (code == 200) {
+                    val resp = conn.inputStream.bufferedReader().readText()
+                    val json = JSONObject(resp)
+                    val now = System.currentTimeMillis()
+                    val interval = maxOf(5, json.optInt("interval", 5)) * 1000L
+                    val result = DeviceLinkSession(json.getString("device_code"), json.getString("user_code"),
+                        json.optString("verification_url", "https://www.google.com/device"),
+                        now + json.getInt("expires_in") * 1000L, interval, now + interval)
+                    synchronized(pendingLock) {
+                        check(requirePrefs().edit().putString(PREF_PENDING_LINK, result.encode()).commit()) {
+                            "Could not save pending authorization"
+                        }
+                    }
+                    AppLog.i(TAG, "Device authorization requested")
+                    return@withContext result
+                } else {
+                    AppLog.e(TAG, "Device code request failed HTTP $code")
+                    return@withContext null
+                }
+            } catch (e: Exception) {
+                AppLog.e(TAG, "Device code request error", e)
                 return@withContext null
+            } finally {
+                conn?.disconnect()
             }
-        } catch (e: Exception) {
-            AppLog.e(TAG, "Device code request error", e)
-            return@withContext null
-        } finally {
-            conn?.disconnect()
         }
     }
+
 
     /**
      * Step 2: Poll Google's token endpoint to check if the user has authorized.
-     * Call this every `interval` seconds (from DeviceCodeResponse).
+     * DeviceLinkPoller handles pacing and resumption of this request.
      */
-    suspend fun pollForAuthorization(deviceCode: String): PollResult = withContext(Dispatchers.IO) {
-        var conn: HttpURLConnection? = null
-        try {
-            conn = URL("https://oauth2.googleapis.com/token").openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.connectTimeout = CONNECT_TIMEOUT
-            conn.readTimeout = READ_TIMEOUT
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+    suspend fun pollForAuthorization(deviceCode: String): DeviceLinkResult = devicePollMutex.withLock {
+        withContext(Dispatchers.IO) {
+            if (pendingDeviceLink()?.deviceCode != deviceCode) return@withContext DeviceLinkResult.Expired
+            var conn: HttpURLConnection? = null
+            try {
+                conn = URL("https://oauth2.googleapis.com/token").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = CONNECT_TIMEOUT
+                conn.readTimeout = READ_TIMEOUT
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
 
-            var body = "client_id=$CLIENT_ID&device_code=$deviceCode&grant_type=urn:ietf:params:oauth:grant-type:device_code"
-            if (CLIENT_SECRET.isNotEmpty()) {
-                body += "&client_secret=$CLIENT_SECRET"
-            }
-            OutputStreamWriter(conn.outputStream).use { it.write(body) }
-
-            val code = conn.responseCode
-            val resp = if (code in 200..299) {
-                conn.inputStream.bufferedReader().readText()
-            } else {
-                conn.errorStream?.bufferedReader()?.readText() ?: ""
-            }
-
-            if (code == 200) {
-                val json = JSONObject(resp)
-                val accessToken = json.getString("access_token")
-                val refreshToken = json.getString("refresh_token")
-                val expiresIn = json.getInt("expires_in")
-
-                requirePrefs().edit()
-                    .putString(PREF_REFRESH_TOKEN, refreshToken)
-                    .putString(PREF_ACCESS_TOKEN, accessToken)
-                    .putLong(PREF_TOKEN_EXPIRY, System.currentTimeMillis() + expiresIn * 1000L)
-                    .apply()
-
-                AppLog.i(TAG, "Authorization successful — tokens stored (encrypted)")
-                return@withContext PollResult.Success(accessToken)
-            }
-
-            // Parse error
-            val json = try { JSONObject(resp) } catch (_: Exception) { null }
-            val error = json?.optString("error", "") ?: ""
-
-            return@withContext when (error) {
-                "authorization_pending" -> PollResult.Pending
-                "slow_down" -> PollResult.SlowDown
-                "expired_token" -> {
-                    AppLog.w(TAG, "Device code expired")
-                    PollResult.Expired
+                var body = "client_id=$CLIENT_ID&device_code=$deviceCode&grant_type=urn:ietf:params:oauth:grant-type:device_code"
+                if (CLIENT_SECRET.isNotEmpty()) {
+                    body += "&client_secret=$CLIENT_SECRET"
                 }
-                "access_denied" -> {
-                    AppLog.w(TAG, "User denied access")
-                    PollResult.Error("Access denied")
+                OutputStreamWriter(conn.outputStream).use { it.write(body) }
+
+                val code = conn.responseCode
+                val resp = if (code in 200..299) {
+                    conn.inputStream.bufferedReader().readText()
+                } else {
+                    conn.errorStream?.bufferedReader()?.readText() ?: ""
                 }
-                else -> {
-                    AppLog.e(TAG, "Poll error HTTP $code: $error")
-                    PollResult.Error("HTTP $code: $error")
+
+                if (code == 200) {
+                    val json = JSONObject(resp)
+                    val accessToken = json.getString("access_token")
+                    val refreshToken = json.getString("refresh_token")
+                    val expiresIn = json.getInt("expires_in")
+
+                    synchronized(pendingLock) {
+                        if (pendingDeviceLink()?.deviceCode != deviceCode) return@withContext DeviceLinkResult.Expired
+                        check(requirePrefs().edit()
+                            .putString(PREF_REFRESH_TOKEN, refreshToken)
+                            .putString(PREF_ACCESS_TOKEN, accessToken)
+                            .putLong(PREF_TOKEN_EXPIRY, System.currentTimeMillis() + expiresIn * 1000L)
+                            .remove(PREF_PENDING_LINK).commit()) { "Could not save Drive authorization" }
+                    }
+                    AppLog.i(TAG, "Authorization successful; tokens stored (encrypted)")
+                    return@withContext DeviceLinkResult.Success
                 }
+
+                // Parse error
+                val json = try { JSONObject(resp) } catch (_: Exception) { null }
+                val error = json?.optString("error", "") ?: ""
+
+                return@withContext when (error) {
+                    "authorization_pending" -> DeviceLinkResult.Pending
+                    "slow_down" -> DeviceLinkResult.SlowDown
+                    "expired_token" -> {
+                        AppLog.w(TAG, "Device code expired")
+                        DeviceLinkResult.Expired
+                    }
+                    "access_denied" -> {
+                        AppLog.w(TAG, "User denied access")
+                        DeviceLinkResult.Error("Access denied")
+                    }
+                    else -> {
+                        AppLog.e(TAG, "Poll error HTTP $code")
+                        if (code == 429 || code >= 500) DeviceLinkResult.Retryable
+                        else DeviceLinkResult.Error("Drive linking failed (HTTP $code). Tap LINK to retry.")
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e(TAG, "Drive linking interrupted; pending session retained", e)
+                return@withContext DeviceLinkResult.Retryable
+            } finally {
+                conn?.disconnect()
             }
-        } catch (e: Exception) {
-            AppLog.e(TAG, "Poll error", e)
-            return@withContext PollResult.Error(e.message ?: "Unknown error")
-        } finally {
-            conn?.disconnect()
         }
     }
+
 
     // ─── Access Token ────────────────────────────────────────────────────
 

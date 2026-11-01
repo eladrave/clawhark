@@ -61,18 +61,28 @@ class MainActivity : Activity() {
             recordGroup.visibility = View.GONE
             authGroup.visibility = View.VISIBLE
             authStatus.text = "Connect your Google Drive"
+            if (AuthManager.pendingDeviceLink() != null) linkDrive(false)
         }
         authBtn.setOnClickListener { linkDrive() }
         findViewById<Button>(R.id.offlineBtn).setOnClickListener {
-            authJob?.cancel()
-            authBtn.isEnabled = true
+            // Cloud linking can finish while the visible user uses offline recording controls.
             showRecorder()
         }
         UploadWorker.schedule(this)
         UploadWorker.kick(this)
         showRecorder()
+        if (AuthManager.pendingDeviceLink() != null && !prefs.getBoolean(RecordingService.PREF_SHOULD_RECORD, false)) {
+            authGroup.visibility = View.VISIBLE
+            recordGroup.visibility = View.GONE
+        }
         scope.launch {
-            while (isActive) { if (visible) updateUI(); delay(1000) }
+            while (isActive) {
+                if (visible) {
+                    updateUI()
+                    if (authJob?.isActive != true && AuthManager.pendingDeviceLink() != null) linkDrive(false)
+                }
+                delay(1000)
+            }
         }
     }
 
@@ -80,13 +90,15 @@ class MainActivity : Activity() {
         super.onStart()
         visible = true
         bound = bindService(Intent(this, RecordingService::class.java), connection, BIND_AUTO_CREATE)
+        if (AuthManager.pendingDeviceLink() != null) linkDrive(false)
+        else if (AuthManager.isAuthenticated()) { showRecorder(); UploadWorker.kick(this) }
         // Only resume previously requested capture from a visible Activity with microphone permission.
         if (prefs.getBoolean(RecordingService.PREF_SHOULD_RECORD, false) && hasMic()) startCapture()
     }
     override fun onStop() {
         visible = false
-        authJob?.cancel() // A delayed authorization response must never start a microphone.
-        authBtn.isEnabled = true
+        // Pause network polling, but retain the encrypted grant for onStart/process recreation.
+        authJob?.cancel()
         if (bound) { unbindService(connection); bound = false; service = null }
         super.onStop()
     }
@@ -150,29 +162,45 @@ class MainActivity : Activity() {
         linkBtn.text = if (AuthManager.isAuthenticated()) "RELINK DRIVE" else "LINK DRIVE"
     }
 
-    private fun linkDrive() {
-        authJob?.cancel()
+    private fun linkDrive(requestCode: Boolean = true) {
+        if (!visible || authJob?.isActive == true) return
         authBtn.isEnabled = false
-        authJob = scope.launch {
+        authBtn.text = "WAITING"
+        authJob = scope.launch(start = CoroutineStart.LAZY) {
             try {
-                val response = AuthManager.requestDeviceCode()
-                if (response == null) { authStatus.text = "Cloud setup unavailable.\nRecording works offline."; return@launch }
-                authCode.text = response.userCode
-                authCode.visibility = View.VISIBLE
-                authStatus.text = "Enter code at\ngoogle.com/device"
-                var interval = maxOf(response.interval, 5) * 1000L
-                val deadline = SystemClock.elapsedRealtime() + response.expiresIn * 1000L
-                while (isActive && SystemClock.elapsedRealtime() < deadline) {
-                    delay(interval)
-                    when (val result = AuthManager.pollForAuthorization(response.deviceCode)) {
-                        is AuthManager.PollResult.Success -> { UploadWorker.kick(this@MainActivity); showRecorder(); return@launch }
-                        is AuthManager.PollResult.Pending -> Unit
-                        is AuthManager.PollResult.SlowDown -> interval += 5000
-                        else -> { authStatus.text = "Authorization not completed. Retry or record offline."; return@launch }
+                if (requestCode && AuthManager.requestDeviceCode() == null) {
+                    authCode.visibility = View.GONE
+                    authStatus.text = "Cloud setup unavailable.\nRecording works offline."
+                    return@launch
+                }
+                val linked = AuthManager.deviceLinkPoller().resume { session, message ->
+                    if (visible && authGroup.visibility == View.VISIBLE) {
+                        authCode.text = session.userCode
+                        authCode.visibility = if (AuthManager.pendingDeviceLink() != null) View.VISIBLE else View.GONE
+                        authStatus.text = message
                     }
                 }
-                authStatus.text = "Code expired. Retry or record offline."
-            } finally { authBtn.isEnabled = true }
+                if (linked || AuthManager.isAuthenticated()) {
+                    UploadWorker.kick(this@MainActivity)
+                    if (visible) {
+                        showRecorder()
+                        Toast.makeText(this@MainActivity, "Google Drive linked", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("UI", "Drive linking interrupted", e)
+                if (visible) authStatus.text = "Linking interrupted. Reopen the app to resume."
+            } finally {
+                // A stopped Activity's old request cannot reset a newer request's controls.
+                if (currentCoroutineContext()[Job] === authJob) {
+                    authJob = null
+                    authBtn.isEnabled = true
+                    authBtn.text = if (AuthManager.pendingDeviceLink() != null) "CHECK LINK" else "LINK"
+                }
+            }
         }
+        authJob?.start()
     }
 }
