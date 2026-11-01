@@ -44,7 +44,7 @@ Recording works before cloud setup. For uploads:
 4. On watch, select Link Drive and authorize the displayed code at `google.com/device`.
 5. Record a short session; verify its WAV in the app-created `Rave AI` Drive folder before any extended trial.
 
-OAuth credentials and live Drive upload have not been configured or tested in this development session. OAuth tokens use the inherited encrypted preferences. The spool binds to the first linked Drive account's stable permission ID; a different account cannot adopt pending audio. A multi-account migration/export UI is not implemented.
+The personal Rave AI OAuth client and configured test APK are ready; see [docs/google-cloud-setup.md](docs/google-cloud-setup.md) for the download, verified setup, and private signing recovery location. A real watch recording/upload roundtrip has not yet been validated. OAuth tokens use the inherited encrypted preferences. The spool binds to the first linked Drive account's stable permission ID; a different account cannot adopt pending audio. A multi-account migration/export UI is not implemented.
 
 ## Device qualification
 
