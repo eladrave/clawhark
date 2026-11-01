@@ -20,8 +20,59 @@ class SettingsActivity : Activity() {
         fun button(label: String, action: () -> Unit) = Button(this).apply {
             text = label; column.addView(this); setOnClickListener { action() }
         }
+        fun select(labels: List<String>, selected: Int, action: (Int) -> Unit) {
+            val picker = Spinner(this).apply {
+                adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, labels)
+                setSelection(selected)
+            }
+            column.addView(picker)
+            picker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = action(position)
+            }
+        }
+        fun changed(message: String) {
+            AppLog.i("Settings", "$message; ${AppSettings.profile(this)}")
+            RecorderStatus.refreshTile(this)
+        }
+        fun syncNow() {
+            AppLog.i("Settings", "Manual sync requested; ${AppSettings.profile(this)}")
+            AppLog.flush()
+            UploadWorker.syncNow(this)
+            Toast.makeText(this, "Sync queued for selected content", Toast.LENGTH_SHORT).show()
+        }
         text("Rave AI settings • ${BuildConfig.VERSION_NAME}")
         text(BatteryMonitor.label)
+        text("Battery test presets")
+        select(listOf("Choose a preset", "Baseline: 15-minute uploads", "Capture only: manual sync", "Logs only: 15-minute uploads"), 0) { position ->
+            if (position != 0) {
+                AppSettings.applyPreset(this, position)
+                changed("Battery preset selected: $position")
+                UploadWorker.reconfigure(this)
+                recreate()
+            }
+        }
+        text("Presets change upload timing/content only. Recording mode, sensitivity, logging detail and tile preference stay as selected. Manual only keeps audio and logs on the watch until you sync.")
+        val testStatus = text(if (AppSettings.testId(this) == "none") "No battery test marked" else "Battery test active")
+        button("START BATTERY TEST") {
+            if (AppSettings.testId(this) != "none") { AppLog.i("Test", "END reason=replaced; ${AppSettings.profile(this)}"); AppLog.flush() }
+            AppSettings.set(this, AppSettings.LOGGING, true)
+            AppSettings.startTest(this)
+            UploadWorker.testStarted(this)
+            AppLog.i("Test", "BEGIN; state=${RecorderStatus.state(this)}; active_mode=${RecorderStatus.mode(this)}; ${AppSettings.profile(this)}")
+            AppLog.flush()
+            testStatus.text = "Battery test active"
+            Toast.makeText(this, "Test marked; logging enabled", Toast.LENGTH_SHORT).show()
+            recreate()
+        }
+        button("END TEST & SYNC") {
+            AppLog.i("Test", "END; state=${RecorderStatus.state(this)}; active_mode=${RecorderStatus.mode(this)}; ${AppSettings.profile(this)}")
+            AppLog.flush()
+            AppSettings.finishTest(this)
+            testStatus.text = "Test ended"
+            syncNow()
+        }
+        text("Start recording in the main app first and let any active sync finish before testing. START marks the current session and enables logging; it does not start the microphone. END marks the end and syncs selected content. Capture continues until you press STOP in the main app.")
         text("Recording mode (applies next start)")
         val modes = RadioGroup(this)
         val continuous = RadioButton(this).apply { id = View.generateViewId(); text = "Continuous" }
@@ -30,8 +81,7 @@ class SettingsActivity : Activity() {
         modes.check(if (AppSettings.speechOnly(this)) speech.id else continuous.id)
         modes.setOnCheckedChangeListener { _, id ->
             AppSettings.set(this, AppSettings.MODE, id == speech.id)
-            AppLog.i("Settings", "Recording mode changed; speech_only=${id == speech.id}")
-            RecorderStatus.refreshTile(this)
+            changed("Recording mode changed; speech_only=${id == speech.id}")
         }
         text("Speech only saves 1 second before speech and 2 seconds after it. The microphone still listens. Quiet speech can be missed; use Continuous when completeness matters.")
         text("Speech sensitivity (next start)")
@@ -46,7 +96,7 @@ class SettingsActivity : Activity() {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (position != AppSettings.sensitivity(this@SettingsActivity)) {
                     AppSettings.setSensitivity(this@SettingsActivity, position)
-                    AppLog.i("Settings", "Speech sensitivity changed to $position")
+                    changed("Speech sensitivity changed to $position")
                 }
             }
         }
@@ -63,7 +113,7 @@ class SettingsActivity : Activity() {
         text("Upload timing")
         val timing = Spinner(this).apply {
             adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item,
-                listOf("Immediate", "Every 15 minutes", "While charging"))
+                UploadPolicy.timingLabels)
             setSelection(AppSettings.uploadTiming(this@SettingsActivity))
         }
         column.addView(timing)
@@ -72,21 +122,45 @@ class SettingsActivity : Activity() {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (position != AppSettings.uploadTiming(this@SettingsActivity)) {
                     AppSettings.setUploadTiming(this@SettingsActivity, position)
-                    AppLog.i("Settings", "Upload timing changed to $position")
+                    changed("Upload timing changed to ${UploadPolicy.timingLabels[position]}")
                     UploadWorker.reconfigure(this@SettingsActivity)
                 }
             }
         }
-        text("Batching reduces upload wakeups. While charging keeps files local until charging. SYNC NOW bypasses batching but respects charging and unmetered preferences.")
+        text("Manual only disables automatic audio/log uploads, including existing automatic jobs. SYNC NOW bypasses the interval/manual-only setting, but respects charging, unmetered and selected-content preferences.")
+        text("Upload content")
+        select(UploadPolicy.contentLabels, AppSettings.uploadContent(this)) { position ->
+            if (position != AppSettings.uploadContent(this)) {
+                AppSettings.setInt(this, AppSettings.UPLOAD_CONTENT, position)
+                changed("Upload content changed to ${UploadPolicy.contentLabels[position]}")
+                UploadWorker.reconfigure(this)
+            }
+        }
+        text("Logs only keeps recordings local. Audio only keeps diagnostics local. Excluded files are retained; select Audio and logs when ready to upload both.")
+        text("Logging detail")
+        select(listOf("Normal", "Battery trial: fewer events"), AppSettings.logDetail(this)) { position ->
+            if (position != AppSettings.logDetail(this)) {
+                AppSettings.setInt(this, AppSettings.LOG_DETAIL, position)
+                changed("Logging detail changed to $position")
+            }
+        }
+        text("Battery trial detail keeps battery, settings, test markers, capture summaries and all warnings/errors. It omits routine speech transitions, per-file upload progress and screen events.")
+        val tileUpdates = Switch(this).apply { text = "Live tile updates"; isChecked = AppSettings.tileUpdates(this@SettingsActivity) }
+        column.addView(tileUpdates)
+        tileUpdates.setOnCheckedChangeListener { _, enabled ->
+            AppSettings.set(this, AppSettings.TILE_UPDATES, enabled)
+            changed("Live tile updates changed to $enabled")
+        }
+        text("When off, the tile refreshes on opening and safety transitions. Cached active status can expire to CHECK RECORDER while left open.")
         val unmetered = Switch(this).apply { text = "Unmetered uploads only"; isChecked = AppSettings.unmetered(this@SettingsActivity) }
         column.addView(unmetered)
         text("When enabled, recordings and logs wait for an unmetered connection, usually Wi-Fi.")
         unmetered.setOnCheckedChangeListener { _, enabled ->
             AppSettings.set(this, AppSettings.UNMETERED, enabled)
-            AppLog.i("Settings", "Unmetered upload preference changed to $enabled")
+            changed("Unmetered upload preference changed to $enabled")
             UploadWorker.reconfigure(this)
         }
-        button("SYNC NOW") { AppLog.i("Settings", "Manual sync requested"); AppLog.flush(); UploadWorker.kick(this, true); Toast.makeText(this, "Sync queued", Toast.LENGTH_SHORT).show() }
+        button("SYNC NOW") { syncNow() }
         button("BACK") { finish() }
     }
 }

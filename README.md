@@ -29,6 +29,10 @@ WAV costs about **115 MB/hour, 2.76 GB/day** of continuous recording, plus heade
 ### Version 1.2 battery comparison build
 
 Version 1.2.0 adds the Rave AI pulse/memory logo and reduces file, diagnostic, tile and upload overhead. See [battery changes and comparison procedure](docs/battery-1.2.md). WAV format, microphone capture, speech detection, upload preferences and verified cleanup remain compatible. Every log line includes the app version; capture summaries report input/stored durations and process CPU time, and upload summaries report elapsed time, verified bytes and HTTP request counts. Actual battery improvement is not yet measured.
+
+### Version 1.3 battery test controls
+
+Use Settings for Baseline, Capture only (manual sync), or Logs only presets. Manual only disables automatic audio/log uploads; SYNC NOW and END TEST & SYNC explicitly upload selected content. Additional choices include 30/60-minute intervals, audio/log content selection, reduced diagnostic detail, and live tile updates. START BATTERY TEST enables logging and marks the current session; it does not start capture. Each log line has a test ID. Upgrade preserves existing settings. See [battery-testing.md](docs/battery-testing.md) for exact controls, retention and a repeatable comparison.
 - New recording names include the watch's local date, time, milliseconds, numeric UTC offset, and unique suffix: `RaveAI_2026-11-01_11-42-18-123_-0500_<uuid>.wav`. Existing pending recordings keep their names and upload identities.
 
 WebRTC native release provenance and included licenses are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Omi uses Silero in software and dedicated activity detection on some hardware. No Omi implementation code is copied; a generic watch app cannot assume access to that dedicated hardware.

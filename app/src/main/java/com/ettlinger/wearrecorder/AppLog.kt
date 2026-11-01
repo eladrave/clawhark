@@ -20,12 +20,13 @@ object AppLog {
     @Synchronized private fun write(level: String, tag: String, message: String) {
         val c = app ?: return
         if (!AppSettings.logging(c)) { status = "Off"; return }
+        if (!UploadPolicy.keepDiagnostic(AppSettings.logDetail(c), level, tag)) return
         try {
             if (logs == null) logs = DiagnosticLogStore(RecordingFiles.logs(c))
             val now = System.currentTimeMillis()
             val at = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.ROOT).format(Date(now))
             val safe = DiagnosticLogStore.redact(message.replace('\n', ' ').take(1200))
-            val line = "$at $level/$tag ${BatteryMonitor.label} | v=${BuildConfig.VERSION_NAME} $safe"
+            val line = "$at $level/$tag ${BatteryMonitor.label} | v=${BuildConfig.VERSION_NAME} test=${AppSettings.testId(c)} $safe"
             logs!!.append(line, now, important = level == "E" || level == "W")
             status = "Enabled"
             Log.println(if (level == "E") Log.ERROR else Log.INFO, "RaveAI.$tag", safe)

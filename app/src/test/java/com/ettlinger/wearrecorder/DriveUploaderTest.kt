@@ -9,6 +9,33 @@ import java.nio.file.Files
 import java.util.ArrayDeque
 
 class DriveUploaderTest {
+    @Test fun pausedUploadsDoNotEvenRefreshATokenOrOpenAConnection() = runBlocking {
+        val store = RecordingStore(Files.createTempDirectory("paused-upload").toFile())
+        val file = store.begin(1).let { it.append(ByteArray(640), 640); it.seal() }
+        var tokens = 0; var connections = 0
+        val uploader = DriveUploader(store, { tokens++; "synthetic" }, { connections++; error("Must not connect") }, requestAllowed = { false })
+        assertNull(uploader.uploadFile(file))
+        assertEquals(0, tokens); assertEquals(0, connections)
+        assertTrue(file.exists())
+    }
+    @Test fun policyChangeBeforePostRetainsStableIdAndOriginalWithoutPublishing() = runBlocking {
+        val store = RecordingStore(Files.createTempDirectory("mid-upload-pause").toFile())
+        val file = store.begin(1).let { it.append(ByteArray(640), 640); it.seal() }
+        val replies = ArrayDeque<Reply>()
+        replies.add(Reply("/about?",200,"""{"user":{"permissionId":"owner"}}"""))
+        replies.add(Reply("generateIds",200,"""{"ids":["retained_id"]}"""))
+        replies.add(Reply("/files/retained_id?",404,""))
+        replies.add(Reply("/files?q=",200,"""{"files":[{"id":"folder"}]}"""))
+        val requests = mutableListOf<Fake>()
+        val uploader = DriveUploader(store, { "synthetic" }, { url ->
+            val reply = replies.removeFirst(); assertTrue(url.contains(reply.match))
+            Fake(reply,url).also { requests.add(it) }
+        }, requestAllowed = { requests.size < 4 })
+        assertNull(uploader.uploadFile(file))
+        assertEquals("retained_id", store.readDriveId(file))
+        assertEquals(0, requests.count { it.requestMethod == "POST" })
+        assertTrue(file.exists())
+    }
     private class Reply(val match: String, val code: Int, val body: String, val timeout: Boolean = false)
     private class Fake(val reply: Reply, url: String) : HttpURLConnection(URL(url)) {
         val sent = ByteArrayOutputStream()

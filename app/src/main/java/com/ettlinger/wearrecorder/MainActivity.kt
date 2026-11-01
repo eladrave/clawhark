@@ -170,7 +170,7 @@ class MainActivity : Activity() {
         val megabytes = String.format("%.1f", store.bytesUsed() / 1024.0 / 1024.0)
         val detail = prefs.getString(RecordingService.PREF_ERROR, null)
             ?: prefs.getString(UploadWorker.PREF_STATUS, "Audio saved on watch")
-        infoText.text = "${store.pending().size} pending | $megabytes MB\n${service?.modeLabel() ?: if (AppSettings.speechOnly(this)) "Speech only" else "Continuous"}\n$detail"
+        infoText.text = "${store.pending().size} pending | $megabytes MB\n${service?.modeLabel() ?: if (AppSettings.speechOnly(this)) "Speech only" else "Continuous"}\n${AppSettings.uploadLabel(this)}\n$detail"
         linkBtn.text = if (AuthManager.isAuthenticated()) "RELINK DRIVE" else "LINK DRIVE"
     }
 

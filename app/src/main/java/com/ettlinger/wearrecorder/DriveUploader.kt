@@ -17,7 +17,8 @@ class DriveUploader(
     private val tokenProvider: suspend () -> String? = { AuthManager.getAccessToken() },
     private val openConnection: (String) -> HttpURLConnection = { URL(it).openConnection() as HttpURLConnection },
     private val ownerStore: RecordingStore = store,
-    idBatchSize: Int = 1
+    idBatchSize: Int = 1,
+    private val requestAllowed: () -> Boolean = { true }
 ) {
     data class VerifiedCopy(val id: String, val size: Long, val md5: String)
     private val folders = mutableMapOf<String, String>()
@@ -27,8 +28,10 @@ class DriveUploader(
     var requestCount = 0
         private set
 
-    private fun connection(url: String, token: String, method: String = "GET"): HttpURLConnection =
-        openConnection(url).apply {
+    private class UploadPaused : java.io.IOException()
+    private fun connection(url: String, token: String, method: String = "GET"): HttpURLConnection {
+        if (!requestAllowed()) throw UploadPaused()
+        return openConnection(url).apply {
             requestCount++
             requestMethod = method
             setRequestProperty("Authorization", "Bearer $token")
@@ -36,6 +39,7 @@ class DriveUploader(
             readTimeout = 120_000
             instanceFollowRedirects = false
         }
+    }
 
     private fun response(conn: HttpURLConnection): JSONObject {
         val code = conn.responseCode
@@ -102,6 +106,7 @@ class DriveUploader(
     }
 
     suspend fun uploadFile(file: File, logFile: Boolean = false): VerifiedCopy? = withContext(Dispatchers.IO) {
+        if (!requestAllowed()) return@withContext null
         val token = tokenProvider() ?: return@withContext null
         try {
             verifyOwner(token)
@@ -141,6 +146,9 @@ class DriveUploader(
                 "Cloud copy does not match; local audio retained"
             }
             VerifiedCopy(id, localSize, localMd5)
+        } catch (_: UploadPaused) {
+            AppLog.i("Upload", "Upload paused by settings; local file retained")
+            null
         } catch (e: Exception) {
             AppLog.e("Drive", "Upload not verified; local recording retained", e)
             null

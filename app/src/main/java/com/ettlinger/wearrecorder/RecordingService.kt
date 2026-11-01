@@ -176,7 +176,7 @@ class RecordingService : Service() {
                 } catch (_: Exception) { vadFallback = true; speechOnly = false; AppLog.w("VAD", "Cannot initialize; saving all audio") }
                   catch (_: LinkageError) { vadFallback = true; speechOnly = false; AppLog.w("VAD", "Native detector unavailable; saving all audio") }
             }
-            AppLog.i("Profile", "Capture start; mode=${modeLabel()}; sensitivity=${AppSettings.sensitivity(this@RecordingService)}; upload_timing=${AppSettings.uploadTiming(this@RecordingService)}; unmetered=${AppSettings.unmetered(this@RecordingService)}; pcm_hz=$SAMPLE_RATE; read_samples=$BUFFER_SAMPLES")
+            AppLog.i("Profile", "Capture start; mode=${modeLabel()}; ${AppSettings.profile(this@RecordingService)}; pcm_hz=$SAMPLE_RATE; read_samples=$BUFFER_SAMPLES")
 
             while (requested && currentCoroutineContext().isActive) {
                 if (recorder == null) {

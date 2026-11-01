@@ -47,6 +47,7 @@ object RecorderStatus {
         if (visible) refreshTile(c, force = true)
     }
     @Synchronized fun refreshTile(c: Context, force: Boolean = false) {
+        if (!force && !AppSettings.tileUpdates(c)) return
         if (!refreshPolicy.shouldRequest(SystemClock.elapsedRealtime(), force)) return
         try { TileService.getUpdater(c).requestUpdate(StatusTileService::class.java) } catch (_: Exception) { }
     }
