@@ -10,6 +10,16 @@ import android.widget.*
 
 class SettingsActivity : Activity() {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var uiJob: Job? = null
+    private var refreshStatus: (() -> Unit)? = null
+    override fun onStart() {
+        super.onStart()
+        uiJob?.cancel()
+        uiJob = scope.launch {
+            while (isActive) { refreshStatus?.invoke(); delay(5000) }
+        }
+    }
+    override fun onStop() { uiJob?.cancel(); uiJob = null; super.onStop() }
     override fun onDestroy() { scope.cancel(); super.onDestroy() }
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -22,7 +32,12 @@ class SettingsActivity : Activity() {
             text = value; textSize = 14f; setTextColor(0xffeeeeee.toInt()); column.addView(this)
         }
         fun button(label: String, action: () -> Unit) = Button(this).apply {
-            text = label; column.addView(this); setOnClickListener { action() }
+            text = label
+            setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+                intArrayOf(0xffa6a8b3.toInt(), 0xffeeeeee.toInt())))
+            backgroundTintList = android.content.res.ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+                intArrayOf(0xff20222a.toInt(), 0xff2d303c.toInt()))
+            column.addView(this); setOnClickListener { action() }
         }
         fun select(labels: List<String>, selected: Int, action: (Int) -> Unit) {
             val picker = Spinner(this).apply {
@@ -48,7 +63,7 @@ class SettingsActivity : Activity() {
             Toast.makeText(this, "Sync queued for selected content", Toast.LENGTH_SHORT).show()
         }
         text("Rave AI settings • ${BuildConfig.VERSION_NAME}")
-        text(BatteryMonitor.label)
+        val batteryStatus = text(BatteryMonitor.label)
         text("Battery test presets")
         presetStatus = text("Selected preset: ${AppSettings.presetLabel(this)}")
         select(listOf("Choose a preset", "Baseline: 15-minute uploads", "Capture only: manual sync", "Logs only: 15-minute uploads"), 0) { position ->
@@ -61,7 +76,7 @@ class SettingsActivity : Activity() {
             }
         }
         text("Presets change upload timing/content only. Recording mode, sensitivity, logging detail and tile preference stay as selected. Manual only keeps audio and logs on the watch until you sync.")
-        val testStatus = text(if (AppSettings.testId(this) == "none") "No battery test marked" else "Battery test active")
+        val testStatus = text(AppSettings.testDisplay(this))
         val startTest = button("START BATTERY TEST") {
             if (AppSettings.testId(this) != "none") return@button
             AppSettings.set(this, AppSettings.LOGGING, true)
@@ -69,14 +84,8 @@ class SettingsActivity : Activity() {
             UploadWorker.testStarted(this)
             AppLog.i("Test", "BEGIN; state=${RecorderStatus.state(this)}; active_mode=${RecorderStatus.mode(this)}; firmware=${android.os.Build.DISPLAY}; security_patch=${android.os.Build.VERSION.SECURITY_PATCH}; ${AppSettings.profile(this)}")
             AppLog.flush()
-            testStatus.text = "Battery test active"
+            refreshStatus?.invoke()
             Toast.makeText(this, "Test marked; logging enabled", Toast.LENGTH_SHORT).show()
-            recreate()
-        }
-        if (AppSettings.testId(this) != "none") {
-            startTest.text = "TEST ACTIVE"
-            startTest.backgroundTintList = android.content.res.ColorStateList.valueOf(0xff00695c.toInt())
-            startTest.setTextColor(0xffffffff.toInt())
         }
         lateinit var endTest: Button
         endTest = button("END TEST & SYNC") {
@@ -84,12 +93,20 @@ class SettingsActivity : Activity() {
             AppLog.flush()
             val endedTestId = AppSettings.testId(this)
             AppSettings.finishTest(this)
-            testStatus.text = "Test ended"
-            endTest.isEnabled = false
-            startTest.text = "START BATTERY TEST"
-            startTest.backgroundTintList = null
+            refreshStatus?.invoke()
             syncNow(endedTestId)
         }.apply { isEnabled = AppSettings.testId(this@SettingsActivity) != "none" }
+        refreshStatus = {
+            val active = AppSettings.testId(this) != "none"
+            batteryStatus.text = BatteryMonitor.label
+            testStatus.text = AppSettings.testDisplay(this)
+            startTest.text = if (active) "TEST ACTIVE" else "START BATTERY TEST"
+            startTest.setTextColor(0xffeeeeee.toInt())
+            startTest.backgroundTintList = android.content.res.ColorStateList.valueOf(
+                if (active) 0xff00695c.toInt() else 0xff2d303c.toInt())
+            endTest.isEnabled = active
+        }
+        refreshStatus?.invoke()
         text("For a recording trial, start recording in the main app first. For an idle trial, leave recording stopped. Let any sync finish before marking a test. START marks the current session and enables logging; it does not start the microphone. END marks the end and syncs selected content. Capture continues until you press STOP in the main app.")
         text("Recording mode (applies next start)")
         val modes = RadioGroup(this)

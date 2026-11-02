@@ -22,6 +22,8 @@ class MainActivity : Activity() {
     private lateinit var toggleBtn: Button
     private lateinit var statusText: TextView
     private lateinit var batteryText: TextView
+    private lateinit var testText: TextView
+    private lateinit var syncSummaryText: TextView
     private lateinit var infoText: TextView
     private lateinit var recordGroup: LinearLayout
     private lateinit var authGroup: LinearLayout
@@ -47,6 +49,8 @@ class MainActivity : Activity() {
         statusText = findViewById(R.id.statusText)
         infoText = findViewById(R.id.infoText)
         batteryText = findViewById(R.id.batteryText)
+        testText = findViewById(R.id.testText)
+        syncSummaryText = findViewById(R.id.syncSummaryText)
         findViewById<Button>(R.id.settingsBtn).setOnClickListener {
             AppLog.i("UI", "Settings opened")
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -152,6 +156,9 @@ class MainActivity : Activity() {
     private fun showRecorder() { authGroup.visibility = View.GONE; recordGroup.visibility = View.VISIBLE; updateUI() }
     private fun updateUI() {
         batteryText.text = BatteryMonitor.label
+        testText.text = AppSettings.testDisplay(this)
+        testText.setTextColor(if (AppSettings.testId(this) != "none") 0xff71daca.toInt() else 0xffbbbbbb.toInt())
+        syncSummaryText.text = prefs.getString(SyncMeasurements.PREF_STATUS, "Final sync summary: none yet")
         val active = service?.isCurrentlyRecording() == true
         val busy = service?.isBusy() == true
         toggleBtn.isEnabled = service?.isFinalizing() != true
@@ -173,7 +180,7 @@ class MainActivity : Activity() {
         val logPending = RecordingFiles.logs(this).pendingLogs().size
         val lastLog = prefs.getLong(UploadWorker.PREF_LOG_SUCCESS_AT, 0)
         val lastLogLabel = if (lastLog > 0) java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.ROOT).format(java.util.Date(lastLog)) else "none yet"
-        infoText.text = "${store.pending().size} audio pending | $megabytes MB\n${RecorderStatus.mode(this)}\nPreset: ${AppSettings.presetLabel(this)}\n${AppSettings.uploadLabel(this)}\n$detail\nAudio: ${prefs.getString(UploadWorker.PREF_AUDIO_STATUS, "Not synced yet")}\nLogs: $logPending sealed batches pending\n${prefs.getString(UploadWorker.PREF_LOG_STATUS, "No log sync yet")}\nLast log sync: $lastLogLabel\n${prefs.getString(SyncMeasurements.PREF_STATUS, "Sync measurement: none yet")}"
+        infoText.text = "${store.pending().size} audio pending | $megabytes MB\n${RecorderStatus.mode(this)}\nPreset: ${AppSettings.presetLabel(this)}\n${AppSettings.uploadLabel(this)}\n$detail\nAudio: ${prefs.getString(UploadWorker.PREF_AUDIO_STATUS, "Not synced yet")}\nLogs: $logPending sealed batches pending\n${prefs.getString(UploadWorker.PREF_LOG_STATUS, "No log sync yet")}\nLast log sync: $lastLogLabel"
         linkBtn.text = if (AuthManager.isAuthenticated()) "RELINK DRIVE" else "LINK DRIVE"
     }
 

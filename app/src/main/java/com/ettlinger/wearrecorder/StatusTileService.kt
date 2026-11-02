@@ -45,22 +45,26 @@ class StatusTileService : TileService() {
             return LayoutElementBuilders.Layout.Builder().setRoot(root).build()
         }
         val active = state in listOf("RECORDING", "LISTENING", "RECOVERING MIC", "STARTING")
+        val now = System.currentTimeMillis()
         val timeline = TileTimeline.build(layout(state), layout("CHECK RECORDER"), active,
-            minOf(at + 120_000L, System.currentTimeMillis() + 120_000L))
-        return Futures.immediateFuture(TileBuilders.Tile.Builder().setResourcesVersion("1")
+            minOf(at + 120_000L, now + 120_000L), now)
+        return Futures.immediateFuture(TileBuilders.Tile.Builder().setResourcesVersion("2")
             .setFreshnessIntervalMillis(2 * 60 * 60_000L).setTileTimeline(timeline).build())
     }
     override fun onTileResourcesRequest(requestParams: RequestBuilders.ResourcesRequest): ListenableFuture<ResourceBuilders.Resources> =
-        Futures.immediateFuture(ResourceBuilders.Resources.Builder().setVersion("1").build())
+        Futures.immediateFuture(ResourceBuilders.Resources.Builder().setVersion("2").build())
 }
 
 object TileTimeline {
-    fun build(current: LayoutElementBuilders.Layout, stale: LayoutElementBuilders.Layout, active: Boolean, expires: Long): TimelineBuilders.Timeline {
-        val first = TimelineBuilders.TimelineEntry.Builder().setLayout(current)
-        if (active) first.setValidity(TimelineBuilders.TimeInterval.Builder().setEndMillis(expires).build())
-        val timeline = TimelineBuilders.Timeline.Builder().addTimelineEntry(first.build())
-        if (active) timeline.addTimelineEntry(TimelineBuilders.TimelineEntry.Builder().setLayout(stale)
-            .setValidity(TimelineBuilders.TimeInterval.Builder().setStartMillis(expires).build()).build())
+    fun build(current: LayoutElementBuilders.Layout, stale: LayoutElementBuilders.Layout, active: Boolean,
+        expires: Long, now: Long = System.currentTimeMillis()): TimelineBuilders.Timeline {
+        if (!active) return TimelineBuilders.Timeline.Builder()
+            .addTimelineEntry(TimelineBuilders.TimelineEntry.Builder().setLayout(current).build()).build()
+        // No validity means a permanent default. A start-only interval has end=0, not infinity.
+        val timeline = TimelineBuilders.Timeline.Builder().addTimelineEntry(
+            TimelineBuilders.TimelineEntry.Builder().setLayout(stale).build())
+        if (expires > now) timeline.addTimelineEntry(TimelineBuilders.TimelineEntry.Builder().setLayout(current)
+            .setValidity(TimelineBuilders.TimeInterval.Builder().setStartMillis(now).setEndMillis(expires).build()).build())
         return timeline.build()
     }
 }

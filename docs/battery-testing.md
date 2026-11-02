@@ -1,6 +1,6 @@
-# Rave AI battery test controls (1.5)
+# Rave AI battery test controls (1.5.1)
 
-Install 1.5.0 over the existing app. Existing authorization, recordings, logging preference, recording mode, speech sensitivity and upload timing retain their meanings. No new power setting is applied merely by upgrading.
+Install 1.5.1 over the existing app. Existing authorization, recordings, logging preference, recording mode, speech sensitivity and upload timing retain their meanings. No new power setting is applied merely by upgrading.
 
 ## First comparison: capture without automatic uploads
 
@@ -79,3 +79,15 @@ After completion or reconciled abort, an immutable `RaveAI_sync_<session-id>.log
 These are whole-watch battery endpoints, not per-app energy readings. Worker-running time includes network/CPU waits; non-worker time includes OS scheduling and retry backoff. Charging or recording observed during a pass is flagged. Gaps between passes cannot prove charging/recording absent, even with matching endpoints. Recovered aborts end at the last observed sample, not the later reconciliation time. HTTP counts exclude OAuth refresh; byte counts exclude radio/protocol overhead. No automatic hourly rate, runtime extrapolation or energy split is calculated. Compare measured intervals, and repeat matched trials before attributing a difference.
 
 Measurement metadata is limited to 32 active/undelivered sessions, at most 64 KiB each with 64 retained boundary/state-change samples. Delivered metadata is removed; full metadata storage skips new measurement visibly while ordinary payload sync continues. Final receipt files share the existing diagnostic quota. Existing audio/checksum retention rules remain in force. Tests cover session timing, frozen receipts, delivery identity restoration, duplicate attempts, wall-clock/reboot handling, interrupted attempts, sample/capacity bounds and file-path validation. Real-device UI, WorkManager scheduling, process recovery and battery comparisons still require watch qualification. This version establishes measurement, not a demonstrated battery reduction.
+
+## Version 1.5.1: visible test clock and sync status
+
+Finish and sync an in-progress 1.5.0 idle trial before installing this update, so the same-version recording/idle comparison remains intact. The next idle trial is 60 minutes with recording stopped, Manual only, logging enabled, the same display/tile/detail settings, no charging and no mid-trial sync. START BATTERY TEST marks the interval without starting the microphone. END TEST & SYNC closes the interval before uploading.
+
+The main recorder and Settings now show whether a test is marked, its watch-local start time, elapsed duration and the 60-minute target. The target is informational: it does not stop capture, end the test, sync, send a notification or create an alarm. New test markers persist monotonic/boot metadata for accurate elapsed time across Activity/process recreation. Clock adjustments use monotonic duration; reboot, unknown boot or an old 1.5.0 marker shows timing unavailable instead of a guessed timer. Existing test IDs, start timestamps and manual sync epochs retain their meanings.
+
+The START/TEST ACTIVE button restores both foreground and background colors when ending, avoiding white text on a white background. END remains visibly disabled until another test is marked. The main screen has separate test and final-summary fields, and the remaining audio/log/progress text is no longer capped at four lines. Scroll to read longer status and settings; zero audio pending still does not itself confirm diagnostic or final-summary delivery.
+
+The status tile keeps a permanent CHECK RECORDER fallback with no validity restriction and a finite current active entry with explicit start/end bounds. The old start-only stale entry serialized with end=0 and could leave no valid layout after expiration. An already-expired active snapshot now produces only the conservative fallback. Inactive snapshots stay permanent. The resources version is incremented to invalidate the old cache association; live update coalescing/freshness preferences are unchanged.
+
+Visible timers refresh only while the corresponding Activity is visible. No new microphone, network job, background wake lock, service, alarm or periodic tile request is added. Recording format/checkpoint behavior, VAD settings, upload protocol/policy, credentials and pending-file cleanup are unchanged. Automated tests verify serialized tile timeline coverage across expiry and test-clock behavior; actual circular watch rendering and platform timeline-switch timing still need a post-trial watch check. No battery-saving claim is made for this UI patch.

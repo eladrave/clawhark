@@ -82,3 +82,7 @@ Settings includes an explicitly confirmed **DELETE PENDING TEST RECORDINGS** act
 ### Version 1.5 sync-session measurements
 
 With logging enabled, each sync records whole-watch battery endpoints, verified files/bytes, retries and worker-running versus scheduling time across continuations. A separate immutable final summary uploads to Rave AI/logs after the original selected sync ends, so completion is visible even when outside its log cutoff. Restart/charging/recording uncertainty is explicit; the summary does not attribute watch drain to the app or compute a rate. Pending receipts preserve identity across retries. The test button immediately shows TEST ACTIVE in green, and idle test markers permit best-effort battery sampling without starting the microphone. See [the controlled idle/capture/upload procedure](docs/battery-testing.md). Existing settings and capture behavior are preserved.
+
+### Version 1.5.1 visible test/status fixes
+
+The status tile retains a permanent conservative fallback after cached active status expires. Both screens show a marked test's start time, elapsed time and one-hour target; the target is informational and never starts/stops recording or uploads. Ending a test restores a readable START button. Main-screen final-summary status is separate, and audio/log details are no longer clipped after four lines. Finish any current 1.5.0 comparison before updating. Capture, sync and power settings remain compatible; watch rendering still needs physical-device confirmation. See [battery-testing.md](docs/battery-testing.md).
