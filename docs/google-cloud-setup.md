@@ -17,27 +17,27 @@ The owner approved Google's required User Data Policy agreement. A live device-a
 
 ## Personal APK
 
-The current configured APK is **Rave-AI-1.5.0-watch.apk**, compiled from code revision `c5a927b4c2ec6aeba2b0931a2f9cbc21b4a44ab8` with a private, ignored `app/src/main/assets/oauth_config.json`.
+The current configured APK is **Rave-AI-1.5.1-watch.apk**, compiled from code revision `64969a98ee7a5cd5da13b318f07dbc0fcea873da` with a private, ignored `app/src/main/assets/oauth_config.json`.
 
-[Download the configured APK](https://chatgpt.com/library?file_id=libfile_1aa618f9a918819188e20c7bf444103d&account_id=personal)
+[Download the configured APK](https://chatgpt.com/library?file_id=libfile_465d4e0346048191b4eee36a252298f5&account_id=personal)
 
 - Android debug build for physical-device qualification, signed with the dedicated **Rave AI Personal Build** key.
-- Android unit tests: 68 passed, 0 failures or errors. The 17 host recording-store recovery tests also passed, including buffered PCM checkpoint/close recovery. Coverage includes bounded diagnostic-first batches, cancellation propagation, cutoff-based continuations, explicit test-audio cleanup and busy-store refusal, preset labeling, guarded manual sync and stale grants, selected upload content, reduced diagnostic evidence, paused upload/token behavior, tile visibility/coalescing, disk reservation, diagnostic batching/quota, batched Drive IDs and account changes, plus the existing speech/login/upload protocol tests.
+- Android unit tests: 77 passed, 0 failures or errors. The 17 host recording-store recovery tests also passed, including buffered PCM checkpoint/close recovery. Coverage includes bounded diagnostic-first batches, cancellation propagation, cutoff-based continuations, explicit test-audio cleanup and busy-store refusal, preset labeling, guarded manual sync and stale grants, selected upload content, reduced diagnostic evidence, paused upload/token behavior, tile visibility/coalescing, disk reservation, diagnostic batching/quota, batched Drive IDs and account changes, plus the existing speech/login/upload protocol tests.
 - Debug APK build and lint: passed with 0 errors and 75 warnings.
 - APK signature and ZIP alignment: verified.
 - Packaged app label: **Rave AI**.
 - Packaged OAuth configuration: verified against the newly created client; no user access tokens, refresh tokens, or signing keys are embedded.
-- APK SHA-256: `e9678ec773a941d491a63ba866018f2c02b0654106a226c2fe22d6929e0d637c`.
+- APK SHA-256: `ee8d1a97eb5916703f31402c4eeac1d724e9b0339296e81997fd680964c7fd07`.
 
 The user installed 1.0.0 and supplied screenshots showing Google web approval succeeded while the watch remained on the code/link screen. Source inspection found that Activity.onStop canceled polling without persisting or resuming the pending grant. Version 1.0.1 persists the pending grant in encrypted preferences and resumes polling on return or Activity/process recreation. It retains server pacing and retries transient failures. Token storage and clearing of the pending grant are synchronous and atomic. Linking does not start the microphone.
 
-Install 1.5.0 **over the existing app**, preserving data and signing identity: `adb install -r Rave-AI-1.5.0-watch.apk`. Its version code is 7. Do not uninstall or clear storage. A working Drive link requires no new consent. The owner confirmed the earlier linking fix and real recording uploads.
+Install 1.5.1 **over the existing app**, preserving data and signing identity: `adb install -r Rave-AI-1.5.1-watch.apk`. Its version code is 8. Do not uninstall or clear storage. A working Drive link requires no new consent. The owner confirmed the earlier linking fix and real recording uploads.
 
 The app creates a **Rave AI** folder in the root of that linked account's Drive on its first upload. Audio is retained until a matching cloud ID, size and checksum are verified, unless the owner explicitly confirms local test-audio deletion in Settings. The user reports successful Drive linking and real file uploads following the 1.0.1 fix. Uploaded 1.1 diagnostics now show speech-only capture and real log uploads. Version 1.2 diagnostics show capture and verified uploads, but do not establish a battery improvement. The 1.3 capture-only trial measured approximately 6.47 percentage points/hour of whole-watch drain over 111.35 minutes. Version 1.5 sync measurements, long screen-off continuity, interruptions and battery benefit still need physical-device qualification. See [recorder-qualification.md](recorder-qualification.md).
 
 ## Current feature setup and validation
 
-Install 1.5.0 over the existing app. Existing working Drive authorization and recordings are preserved; there is no need to relink a working account. The earlier 1.0.0-to-1.0.1 fresh-code requirement is historical.
+Install 1.5.1 over the existing app. Existing working Drive authorization and recordings are preserved; there is no need to relink a working account. The earlier 1.0.0-to-1.0.1 fresh-code requirement is historical.
 
 - Add **Rave AI status** in the watch's tile picker. Status, battery/charging, current mode, pending recordings and a timestamp are shown. The tile opens the recorder. Cached active status has an explicit two-minute timeline expiry to CHECK RECORDER; updates are best effort.
 - Use **SETTINGS** for battery-test presets and BEGIN/END markers, Speech only (beta), sensitivity, opt-in logging and detail, live tile updates, upload timing/content, unmetered-only uploads and SYNC NOW. Recording mode/sensitivity apply on the next capture start. Defaults preserve continuous recording with immediate uploads, allow metered connections, and leave diagnostics off.
@@ -77,6 +77,16 @@ After selected files complete, a separate immutable `RaveAI_sync_<session-id>.lo
 START BATTERY TEST immediately shows green TEST ACTIVE and cannot accidentally replace an active marker. It can mark a stopped/idle trial without starting the microphone; idle sampling is best effort and adds no foreground service or wake lock. END TEST & SYNC links the upload session to the original test ID. Finish any current idle observation before upgrading, then follow [battery-testing.md](battery-testing.md) for matched unplugged idle, capture-only and stopped-upload trials.
 
 Validation: all 68 Android unit tests and 17 host recovery tests passed. New coverage includes session timing, process-death/counter uncertainty, monotonic versus wall time, reboot handling, immutable receipts, duplicate attempts, bounded samples/metadata, orphan enqueue grace/reconciliation, receipt identity restoration after ACK, and validated metadata paths. Build/lint completed with 0 errors and 75 warnings. Signature and ZIP alignment verified; the signing certificate, private OAuth asset and all four native library payloads match 1.4. APK size: 14,725,784 bytes. Real-watch scheduling/recovery/UI qualification remains pending, and no battery saving is established by this release.
+
+## Version 1.5.1 UI correction release
+
+This patch fixes an invalid tile fallback interval, white-on-white START BATTERY TEST button after END, and the four-line recorder status limit that hid sync confirmation. The tile now has a permanent no-validity conservative fallback plus an explicitly bounded active entry. The approach follows [Android's timeline fallback contract](https://developer.android.com/training/wearables/tiles/update). Both screens show test start time, monotonic elapsed duration and an informational 60-minute target. The target never stops capture, ends the test or starts sync automatically.
+
+New markers persist boot/elapsed anchors for display only. Existing ID, start timestamp and manual epoch semantics remain. Old markers/reboots/unknown boot show unavailable timing instead of a guessed timer. Settings refreshes only while visible. Capture/VAD, audio storage, uploader/verification, sync-session measurements, upload preferences, diagnostic sampling and tile update coalescing are unchanged.
+
+The owner reported a marked 1.5.0 recording trial followed by a sync; the final receipt was verified in Drive, while confirmation was hidden by the UI. Complete any current 1.5.0 idle trial and its sync before updating for a same-version comparison. Install over the existing app without uninstalling or clearing storage.
+
+Validation: 77 Android unit tests and 17 host recovery tests passed. Serialized timeline tests cover before/at/after expiry, already-expired snapshots and permanent inactive content; timer tests cover clock changes, reboots, legacy markers and invalid monotonic anchors. Build/lint completed with 0 errors and 75 warnings. The compiled APK has separate test/summary fields without maxLines clipping. Signature and ZIP alignment verified; certificate, private OAuth asset, requested permissions and all four native payloads match 1.5.0. APK size: 14,729,880 bytes. Actual watch rendering, including the tile across expiration and Settings across repeated test cycles, remains a post-trial check. No battery reduction is established by this UI release.
 
 ## Private configuration and future updates
 
