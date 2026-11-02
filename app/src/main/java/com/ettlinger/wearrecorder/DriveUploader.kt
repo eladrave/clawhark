@@ -19,7 +19,8 @@ class DriveUploader(
     private val openConnection: (String) -> HttpURLConnection = { URL(it).openConnection() as HttpURLConnection },
     private val ownerStore: RecordingStore = store,
     idBatchSize: Int = 1,
-    private val requestAllowed: () -> Boolean = { true }
+    private val requestAllowed: () -> Boolean = { true },
+    private val onRequest: () -> Unit = {}
 ) {
     data class VerifiedCopy(val id: String, val size: Long, val md5: String)
     private val folders = mutableMapOf<String, String>()
@@ -34,6 +35,7 @@ class DriveUploader(
         if (!requestAllowed()) throw UploadPaused()
         return openConnection(url).apply {
             requestCount++
+            onRequest()
             requestMethod = method
             setRequestProperty("Authorization", "Bearer $token")
             connectTimeout = 30_000

@@ -293,6 +293,33 @@ public final class RecordingStore {
         new File(dir, "." + audio.getName() + ".receipt").delete();
     }
 
+    public void writeMeasurementState(String name, String text) throws IOException {
+        if (!name.matches("sync_[a-f0-9-]{36}\\.json") || text.getBytes(StandardCharsets.UTF_8).length > 65536)
+            throw new IOException("Invalid measurement state");
+        durableText(new File(dir, name), text);
+    }
+
+    public void deleteMeasurementState(String name) throws IOException {
+        if (!name.matches("sync_[a-f0-9-]{36}\\.json")) throw new IOException("Invalid measurement state");
+        File target = new File(dir, name);
+        if (target.exists() && !target.delete()) throw new IOException("Cannot remove delivered measurement");
+        syncDirectory(dir);
+    }
+
+    public File publishSyncReceipt(String name, String text) throws IOException {
+        if (!name.matches("RaveAI_sync_[a-f0-9-]{36}\\.log")) throw new IOException("Invalid sync receipt name");
+        File target = new File(dir, name);
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        if (target.exists()) {
+            if (!Arrays.equals(java.nio.file.Files.readAllBytes(target.toPath()), bytes)) throw new IOException("Frozen receipt changed");
+            return target;
+        }
+        if (bytesUsed() + bytes.length > 20L * 1024 * 1024 || dir.getUsableSpace() < FREE_RESERVE + bytes.length)
+            throw new IOException("Diagnostic receipt quota reached; measurement retained");
+        durableText(target, text);
+        return target;
+    }
+
     private void durableText(File target, String text) throws IOException {
         File tmp = new File(target.getPath() + ".new");
         try (FileOutputStream out = new FileOutputStream(tmp)) {

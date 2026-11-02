@@ -11,3 +11,5 @@ Uploads may use metered connections unless the user enables unmetered-only uploa
 An explicit confirmed test-cleanup control can delete pending local audio without a cloud receipt. It preserves diagnostics, authorization, settings and cloud copies, and refuses deletion during active capture/upload. No automatic eviction is introduced.
 
 Use recording/pause controls and obtain any required consent for conversations you record. Do not uninstall or clear app storage while recordings need recovery.
+
+With logging enabled, bounded local sync-session metadata includes battery/power/recording observations, app/firmware/test identifiers, timestamps, monotonic timing, verified file/byte counts and Drive request counts. An immutable final summary uploads to the same Rave AI/logs folder using the current upload policy. Its delivery is excluded from measurement. At most 32 undelivered/active metadata records of 64 KiB each are retained; delivered metadata is removed and pending records are not evicted. No audio content or speaker identity is included. Disabling logging pauses measurement and summary uploads without deleting previously queued diagnostics.

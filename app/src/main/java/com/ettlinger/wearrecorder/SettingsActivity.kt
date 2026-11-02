@@ -41,10 +41,10 @@ class SettingsActivity : Activity() {
             AppLog.i("Settings", "$message; ${AppSettings.profile(this)}")
             RecorderStatus.refreshTile(this)
         }
-        fun syncNow() {
+        fun syncNow(sourceTestId: String = AppSettings.testId(this)) {
             AppLog.i("Settings", "Manual sync requested; ${AppSettings.profile(this)}")
             AppLog.flush()
-            UploadWorker.syncNow(this)
+            UploadWorker.syncNow(this, sourceTestId)
             Toast.makeText(this, "Sync queued for selected content", Toast.LENGTH_SHORT).show()
         }
         text("Rave AI settings • ${BuildConfig.VERSION_NAME}")
@@ -62,8 +62,8 @@ class SettingsActivity : Activity() {
         }
         text("Presets change upload timing/content only. Recording mode, sensitivity, logging detail and tile preference stay as selected. Manual only keeps audio and logs on the watch until you sync.")
         val testStatus = text(if (AppSettings.testId(this) == "none") "No battery test marked" else "Battery test active")
-        button("START BATTERY TEST") {
-            if (AppSettings.testId(this) != "none") { AppLog.i("Test", "END reason=replaced; ${AppSettings.profile(this)}"); AppLog.flush() }
+        val startTest = button("START BATTERY TEST") {
+            if (AppSettings.testId(this) != "none") return@button
             AppSettings.set(this, AppSettings.LOGGING, true)
             AppSettings.startTest(this)
             UploadWorker.testStarted(this)
@@ -73,16 +73,24 @@ class SettingsActivity : Activity() {
             Toast.makeText(this, "Test marked; logging enabled", Toast.LENGTH_SHORT).show()
             recreate()
         }
+        if (AppSettings.testId(this) != "none") {
+            startTest.text = "TEST ACTIVE"
+            startTest.backgroundTintList = android.content.res.ColorStateList.valueOf(0xff00695c.toInt())
+            startTest.setTextColor(0xffffffff.toInt())
+        }
         lateinit var endTest: Button
         endTest = button("END TEST & SYNC") {
             AppLog.i("Test", "END; state=${RecorderStatus.state(this)}; active_mode=${RecorderStatus.mode(this)}; firmware=${android.os.Build.DISPLAY}; security_patch=${android.os.Build.VERSION.SECURITY_PATCH}; ${AppSettings.profile(this)}")
             AppLog.flush()
+            val endedTestId = AppSettings.testId(this)
             AppSettings.finishTest(this)
             testStatus.text = "Test ended"
             endTest.isEnabled = false
-            syncNow()
+            startTest.text = "START BATTERY TEST"
+            startTest.backgroundTintList = null
+            syncNow(endedTestId)
         }.apply { isEnabled = AppSettings.testId(this@SettingsActivity) != "none" }
-        text("Start recording in the main app first and let any active sync finish before testing. START marks the current session and enables logging; it does not start the microphone. END marks the end and syncs selected content. Capture continues until you press STOP in the main app.")
+        text("For a recording trial, start recording in the main app first. For an idle trial, leave recording stopped. Let any sync finish before marking a test. START marks the current session and enables logging; it does not start the microphone. END marks the end and syncs selected content. Capture continues until you press STOP in the main app.")
         text("Recording mode (applies next start)")
         val modes = RadioGroup(this)
         val continuous = RadioButton(this).apply { id = View.generateViewId(); text = "Continuous" }

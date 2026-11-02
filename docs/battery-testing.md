@@ -1,6 +1,6 @@
-# Rave AI battery test controls (1.4)
+# Rave AI battery test controls (1.5)
 
-Install 1.4.0 over the existing app. Existing authorization, recordings, logging preference, recording mode, speech sensitivity and upload timing retain their meanings. No new power setting is applied merely by upgrading.
+Install 1.5.0 over the existing app. Existing authorization, recordings, logging preference, recording mode, speech sensitivity and upload timing retain their meanings. No new power setting is applied merely by upgrading.
 
 ## First comparison: capture without automatic uploads
 
@@ -59,3 +59,23 @@ On November 1, 2026, version 1.3.0 ran a stable speech-only interval from 14:10:
 This is whole-watch drain, not an isolated app energy measurement. It exceeds the initial diagnostic alert threshold of 5 percentage points/hour. Do not extrapolate runtime or attribute the difference from older 1.1/1.2 intervals to a single cause. Firmware updates require a fresh baseline. The failed final sync logged three worker cancellations, not a demonstrated charging or authentication fault. Logs-only sync then succeeded with 190 audio files still pending.
 
 Evidence: owner diagnostic log batches beginning at 14:10:40, 15:59:57 and 16:18:37, retained privately in Rave AI/logs. No audio was inspected.
+
+## Version 1.5: separate recording, idle and upload trials
+
+The update preserves preferences and audio behavior. It adds opt-in sync measurements and fixes the battery-test button so it immediately turns green and says TEST ACTIVE. Tapping an active test does not silently replace its ID. START marks a test and enables logging; it does not start the microphone. Five-minute battery samples are attempted while an idle test marker remains active, without adding a foreground service or wake lock. Android may suspend the process, so idle sampling remains best effort.
+
+Finish the current stopped/idle comparison before upgrading. Do not clear storage. Keep firmware, always-on display, connectivity, logging detail and other watch use unchanged between matched trials. With Manual only, Audio and logs, and logging enabled:
+
+1. **Idle:** keep recording stopped and press START BATTERY TEST. Remain unplugged, screen off, and avoid syncing for at least 60 minutes. Press END TEST & SYNC at the end.
+2. **Capture:** after uploads settle, start recording, mark a new test, and use the same settings and comparable conditions for at least 60 minutes. Stop recording, then END TEST & SYNC. Capture interval endpoints precede sync.
+3. **Upload:** keep recording stopped and remain unplugged with stable connectivity while the backlog syncs. Wait for audio/log progress to settle and **Final sync summary verified in Drive**. Do not infer an upload-only hourly rate unless at least 30 minutes of comparable non-charging evidence exists. A short sync may move no displayed battery percentage.
+
+A marked END & SYNC retains the original test ID in the new sync session even though the test itself has ended. Sync measurements require logging enabled. Manual/content, charging and unmetered settings remain authoritative. If logging or log uploads are disabled, final summaries remain locally pending until an eligible explicit sync or recovery. App startup and explicit SYNC NOW reconcile existing sessions and retry eligible pending summaries. Queue execution and delivery are asynchronous. A missing WorkManager record is given a ten-minute create/enqueue grace before orphan reconciliation; aborted summaries retain the last observed endpoint.
+
+Each logical sync has a unique session ID across bounded worker continuations and retries. It stores battery/power/recording samples at execution boundaries, verified audio/log file counts and payload bytes, Drive HTTP requests, elapsed time, worker-running time and known non-worker gaps. The initial manual queue wait is separate; automatic pre-start queue time is unknown. Monotonic time and a boot identifier prevent wall-clock changes from becoming false durations. Reboot/unknown boot or an unmatched process-death attempt makes durations/counts incomplete instead of assigning unknown work to waiting.
+
+After completion or reconciled abort, an immutable `RaveAI_sync_<session-id>.log` is queued under **Rave AI/logs**, independent of the original snapshot cutoff. Its own delivery and retry costs are excluded, avoiding recursive summaries. The report and Drive identity survive an interrupted acknowledgment so the same object is retried. The main app shows pending versus remotely verified final-summary status. Ordinary log-success timestamps may cover only earlier batches; look for the explicit final-summary confirmation.
+
+These are whole-watch battery endpoints, not per-app energy readings. Worker-running time includes network/CPU waits; non-worker time includes OS scheduling and retry backoff. Charging or recording observed during a pass is flagged. Gaps between passes cannot prove charging/recording absent, even with matching endpoints. Recovered aborts end at the last observed sample, not the later reconciliation time. HTTP counts exclude OAuth refresh; byte counts exclude radio/protocol overhead. No automatic hourly rate, runtime extrapolation or energy split is calculated. Compare measured intervals, and repeat matched trials before attributing a difference.
+
+Measurement metadata is limited to 32 active/undelivered sessions, at most 64 KiB each with 64 retained boundary/state-change samples. Delivered metadata is removed; full metadata storage skips new measurement visibly while ordinary payload sync continues. Final receipt files share the existing diagnostic quota. Existing audio/checksum retention rules remain in force. Tests cover session timing, frozen receipts, delivery identity restoration, duplicate attempts, wall-clock/reboot handling, interrupted attempts, sample/capacity bounds and file-path validation. Real-device UI, WorkManager scheduling, process recovery and battery comparisons still require watch qualification. This version establishes measurement, not a demonstrated battery reduction.

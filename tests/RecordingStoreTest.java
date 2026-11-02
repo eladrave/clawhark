@@ -128,6 +128,29 @@ public final class RecordingStoreTest {
                 check(f.exists(),"Busy recording deleted");
             }
         });
+        test("frozen sync receipt is immutable and can restore identity after ACK", () -> {
+            RecordingStore s=store(); String name="RaveAI_sync_"+UUID.randomUUID()+".log";
+            File f=s.publishSyncReceipt(name,"frozen summary\n");
+            s.saveDriveId(f,"stable_summary_id");
+            check(s.publishSyncReceipt(name,"frozen summary\n").equals(f),"Retry changed receipt");
+            try { s.publishSyncReceipt(name,"changed"); throw new AssertionError("Receipt mutated"); } catch(IOException expected) { }
+            long size=f.length(); String md5=RecordingStore.digest(f,"MD5");
+            s.acknowledge(f,"stable_summary_id",size,md5);
+            File recreated=s.publishSyncReceipt(name,"frozen summary\n"); s.saveDriveId(recreated,"stable_summary_id");
+            check(recreated.length()==size && RecordingStore.digest(recreated,"MD5").equals(md5),"Receipt recovery changed bytes");
+            check("stable_summary_id".equals(new RecordingStore(s.directory()).readDriveId(recreated)),"Receipt ID lost");
+        });
+        test("measurement state bounds and paths are validated with durable deletion", () -> {
+            RecordingStore s=store(); String name="sync_"+UUID.randomUUID()+".json";
+            s.writeMeasurementState(name,"{}"); s.deleteMeasurementState(name);
+            check(!new File(s.directory(),name).exists(),"Delivered metadata retained");
+            for(String bad:new String[]{"../escape.json","bad.json"}) {
+                try { s.writeMeasurementState(bad,"{}"); throw new AssertionError("Invalid metadata path"); } catch(IOException expected) { }
+                try { s.deleteMeasurementState(bad); throw new AssertionError("Invalid deletion path"); } catch(IOException expected) { }
+                try { s.publishSyncReceipt(bad,"{}"); throw new AssertionError("Invalid receipt path"); } catch(IOException expected) { }
+            }
+            try { s.writeMeasurementState(name,"x".repeat(65537)); throw new AssertionError("Unbounded metadata"); } catch(IOException expected) { }
+        });
         System.out.println(passed + " host recovery tests passed");
     }
 }

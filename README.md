@@ -63,7 +63,7 @@ Recording works before cloud setup. For uploads:
 4. On watch, select Link Drive and authorize the displayed code at `google.com/device`.
 5. Record a short session; verify its WAV in the app-created `Rave AI` Drive folder before any extended trial.
 
-The personal Rave AI OAuth client and configured test APK are ready; see [docs/google-cloud-setup.md](docs/google-cloud-setup.md) for the download, verified setup, and private signing recovery location. A real watch recording/upload roundtrip has not yet been validated. OAuth tokens use the inherited encrypted preferences. The spool binds to the first linked Drive account's stable permission ID; a different account cannot adopt pending audio. A multi-account migration/export UI is not implemented.
+The personal Rave AI OAuth client and configured test APK are ready; see [docs/google-cloud-setup.md](docs/google-cloud-setup.md) for the download, verified setup, and private signing recovery location. The owner confirmed real watch recording and Drive uploads; long-running recovery and battery qualification remain ongoing. OAuth tokens use the inherited encrypted preferences. The spool binds to the first linked Drive account's stable permission ID; a different account cannot adopt pending audio. A multi-account migration/export UI is not implemented.
 
 ## Device qualification
 
@@ -78,3 +78,7 @@ Current preset is derived from the selected upload timing/content and stays visi
 Sync uploads diagnostics first, limits each worker to 20 objects or about 90 seconds between objects, and schedules successful continuations without failure backoff. A continuation keeps the original file modification-time cutoff so ongoing recording and upload-generated logs do not grow the same sync forever. The current HTTP request may exceed the soft time budget. Cancellation propagates to WorkManager and is reported as a pause with an Android stop reason where available. Stable Drive identity, verification and retention safeguards remain.
 
 Settings includes an explicitly confirmed **DELETE PENDING TEST RECORDINGS** action. Stop recording first. It cancels sync requests, requires both capture/upload locks, and deletes only local test audio and corresponding sidecars. It preserves diagnostics, Drive ownership/login, preferences and remote files. No deletion occurs on upgrade. See [the current trial and recovery procedure](docs/battery-testing.md).
+
+### Version 1.5 sync-session measurements
+
+With logging enabled, each sync records whole-watch battery endpoints, verified files/bytes, retries and worker-running versus scheduling time across continuations. A separate immutable final summary uploads to Rave AI/logs after the original selected sync ends, so completion is visible even when outside its log cutoff. Restart/charging/recording uncertainty is explicit; the summary does not attribute watch drain to the app or compute a rate. Pending receipts preserve identity across retries. The test button immediately shows TEST ACTIVE in green, and idle test markers permit best-effort battery sampling without starting the microphone. See [the controlled idle/capture/upload procedure](docs/battery-testing.md). Existing settings and capture behavior are preserved.

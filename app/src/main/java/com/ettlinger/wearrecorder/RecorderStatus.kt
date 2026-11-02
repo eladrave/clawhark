@@ -14,6 +14,7 @@ object RecorderStatus {
         val now = SystemClock.elapsedRealtime()
         val previous = live
         live = Snapshot(state, mode, now, System.currentTimeMillis())
+        if (previous?.state != state) SyncMeasurements.observe(c)
         val critical = previous?.state != state && state !in listOf("RECORDING", "LISTENING")
         val last = persistedAt
         if (previous == null || critical || previous.mode != mode || last == null || now < last || now - last >= 60_000) {

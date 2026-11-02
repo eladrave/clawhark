@@ -9,6 +9,7 @@ import java.io.IOException
 /** Android directory fsync uses libcore's supported POSIX API, not host-JVM file-channel assumptions. */
 object RecordingFiles {
     fun open(context: Context) = create(context, "recordings")
+    fun measurements(context: Context) = create(context, "sync_measurements")
     fun logs(context: Context) = create(context, "diagnostics")
     private fun create(context: Context, name: String): RecordingStore = RecordingStore(File(context.filesDir, name)) { directory ->
         try {
