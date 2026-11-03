@@ -13,6 +13,10 @@ object AppSettings {
     const val UPLOAD_CONTENT = "upload_content"
     const val LOG_DETAIL = "log_detail"
     const val TILE_UPDATES = "tile_updates"
+    const val EFFICIENT_UPLOADS = "efficient_uploads"
+    const val POOLED_VAD = "pooled_vad"
+    const val CAPTURE_WAKE_LOCK = "capture_wake_lock"
+    const val AUDIO_FORMAT = "audio_format"
     private fun prefs(c: Context) = c.getSharedPreferences("rave_ai_settings", Context.MODE_PRIVATE)
     fun speechOnly(c: Context) = prefs(c).getBoolean(MODE, false)
     fun sensitivity(c: Context) = prefs(c).getInt(SENSITIVITY, 1).coerceIn(0, 2)
@@ -21,9 +25,19 @@ object AppSettings {
     fun uploadContent(c: Context) = prefs(c).getInt(UPLOAD_CONTENT, 0).coerceIn(0, 2)
     fun logDetail(c: Context) = prefs(c).getInt(LOG_DETAIL, 0).coerceIn(0, 1)
     fun tileUpdates(c: Context) = prefs(c).getBoolean(TILE_UPDATES, true)
+    fun powerOptions(c: Context): PowerOptions {
+        val p = prefs(c)
+        return PowerOptions(p.getBoolean(EFFICIENT_UPLOADS, false), p.getBoolean(POOLED_VAD, false),
+            p.getBoolean(CAPTURE_WAKE_LOCK, true), p.getInt(AUDIO_FORMAT, PowerOptions.WAV).coerceIn(0, 1))
+    }
+    fun setPowerOptions(c: Context, options: PowerOptions) {
+        check(prefs(c).edit().putBoolean(EFFICIENT_UPLOADS, options.efficientUploads)
+            .putBoolean(POOLED_VAD, options.reuseSpeechBuffers).putBoolean(CAPTURE_WAKE_LOCK, options.captureWakeLock)
+            .putInt(AUDIO_FORMAT, options.audioFormat).commit())
+    }
     fun setInt(c: Context, key: String, value: Int) { check(prefs(c).edit().putInt(key, value).commit()) }
     fun uploadLabel(c: Context) = "${UploadPolicy.timingLabels[uploadTiming(c)]} / ${UploadPolicy.contentLabels[uploadContent(c)]}"
-    fun profile(c: Context) = "speech_only=${speechOnly(c)}; sensitivity=${sensitivity(c)}; upload_timing=${uploadTiming(c)}; upload_content=${uploadContent(c)}; unmetered=${unmetered(c)}; logging=${logging(c)}; log_detail=${logDetail(c)}; tile_updates=${tileUpdates(c)}"
+    fun profile(c: Context) = "speech_only=${speechOnly(c)}; sensitivity=${sensitivity(c)}; upload_timing=${uploadTiming(c)}; upload_content=${uploadContent(c)}; unmetered=${unmetered(c)}; logging=${logging(c)}; log_detail=${logDetail(c)}; tile_updates=${tileUpdates(c)}; ${powerOptions(c).diagnostic}"
     fun testId(c: Context) = prefs(c).getString("test_id", "none")!!
     private fun bootCount(c: Context): Int? = try {
         Settings.Global.getInt(c.contentResolver, Settings.Global.BOOT_COUNT, -1).takeIf { it >= 0 }

@@ -13,8 +13,8 @@ android {
         applicationId = "ai.etti.clawhark"
         minSdk = 30
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.5.1"
+        versionCode = 9
+        versionName = "1.6.0"
     }
 
     signingConfigs {

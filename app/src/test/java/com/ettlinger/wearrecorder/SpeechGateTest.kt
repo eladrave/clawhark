@@ -53,4 +53,73 @@ class SpeechGateTest {
         val s = Sink(); repeat(10) { s.frame(0); s.frame(7); s.frame(0) }
         s.gate.finish(); assertTrue(s.audio.isEmpty())
     }
+    private data class Trace(
+        val audio: List<Short>, val timestamps: List<Long>, val lengths: List<Int>,
+        val states: List<Pair<Boolean, Boolean>>, val ends: Int, val failedOpen: Boolean
+    )
+
+    private fun variedReadTrace(reuse: Boolean, failAt: Int? = null, interrupt: Boolean = false): Trace {
+        val audio = mutableListOf<Short>()
+        val timestamps = mutableListOf<Long>()
+        val lengths = mutableListOf<Int>()
+        val states = mutableListOf<Pair<Boolean, Boolean>>()
+        var ends = 0
+        var calls = 0
+        val gate = SpeechGate({ frame ->
+            if (++calls == failAt) throw UnsatisfiedLinkError("detector unavailable")
+            frame[0].toInt() % 200 in 80..100
+        }, { pcm, n, at ->
+            audio.addAll(pcm.take(n)); timestamps.add(at); lengths.add(n)
+        }, { ends++ }, { active, fallback -> states.add(active to fallback) }, reuseBuffers = reuse)
+        // Unique PCM throughout each frame detects stale data and aliased pre-roll.
+        val source = ShortArray(320 * 700 + 97) { sample ->
+            val frame = sample / 320
+            if (sample % 320 == 0) frame.toShort() else (frame * 31 + sample % 320).toShort()
+        }
+        val chunks = intArrayOf(137, 4096, 17, 640, 319, 1, 999)
+        var offset = 0
+        var next = 0
+        var interrupted = false
+        while (offset < source.size) {
+            val n = minOf(chunks[next++ % chunks.size], source.size - offset)
+            val chunk = source.copyOfRange(offset, offset + n)
+            gate.accept(chunk, n, 10_000L + offset * 1000L / 16000)
+            offset += n
+            if (interrupt && !interrupted && offset > 320 * 95) {
+                gate.finish()
+                interrupted = true
+            }
+        }
+        gate.finish()
+        return Trace(audio, timestamps, lengths, states, ends, gate.failedOpen)
+    }
+
+    @Test fun pooledFramesMatchBaselinePcmTimingAndUtteranceBoundaries() {
+        assertEquals(variedReadTrace(false), variedReadTrace(true))
+    }
+
+    @Test fun pooledFramesMatchBaselineWhenDetectorFailsOpen() {
+        val optimized = variedReadTrace(true, failAt = 189)
+        assertTrue(optimized.failedOpen)
+        assertEquals(variedReadTrace(false, failAt = 189), optimized)
+    }
+
+    @Test fun pooledFramesMatchBaselineAfterInterruptedFinishAndResume() {
+        assertEquals(variedReadTrace(false, interrupt = true), variedReadTrace(true, interrupt = true))
+    }
+
+    @Test fun poolRemainsBoundedAcrossSilenceSpeechAndTailTransitions() {
+        val identities = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<ShortArray, Boolean>())
+        var calls = 0
+        val gate = SpeechGate({ frame ->
+            identities.add(frame)
+            ++calls % 400 in 200..210
+        }, { _, _, _ -> }, {}, { _, _ -> }, reuseBuffers = true)
+        repeat(5_000) { gate.accept(ShortArray(320), 320, it * 20L) }
+        gate.finish()
+        assertEquals(5_000, calls)
+        // Fifty pre-roll frames plus the frame being filled, independent of trial length.
+        assertTrue("Unbounded frame allocation: ${identities.size}", identities.size <= 51)
+    }
+
 }

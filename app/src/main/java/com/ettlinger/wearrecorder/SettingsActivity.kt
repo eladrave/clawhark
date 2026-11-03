@@ -45,9 +45,14 @@ class SettingsActivity : Activity() {
                 setSelection(selected)
             }
             column.addView(picker)
+            val selectedText = text("Selected: ${labels[selected]}")
             picker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = action(position)
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    (view as? TextView)?.setTextColor(0xffeeeeee.toInt())
+                    selectedText.text = "Selected: ${labels[position]}"
+                    action(position)
+                }
             }
         }
         var presetStatus: TextView? = null
@@ -108,6 +113,49 @@ class SettingsActivity : Activity() {
         }
         refreshStatus?.invoke()
         text("For a recording trial, start recording in the main app first. For an idle trial, leave recording stopped. Let any sync finish before marking a test. START marks the current session and enables logging; it does not start the microphone. END marks the end and syncs selected content. Capture continues until you press STOP in the main app.")
+        text("Battery experiments (change between trials)")
+        val powerStatus = text("Selected: ${AppSettings.powerOptions(this).label}\n${AppSettings.powerOptions(this).formatLabel}")
+        fun applyPower(options: PowerOptions) {
+            val recording = getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE)
+                .getBoolean(RecordingService.PREF_SHOULD_RECORD, false)
+            if (recording || AppSettings.testId(this) != "none") {
+                Toast.makeText(this, "Stop recording and end the battery test before changing experiments", Toast.LENGTH_LONG).show()
+                recreate()
+                return
+            }
+            AppSettings.setPowerOptions(this, options)
+            powerStatus.text = "Selected: ${options.label}\n${options.formatLabel}"
+            changed("Battery experiments selected: ${options.diagnostic}")
+            Toast.makeText(this, "Selected: ${options.label}", Toast.LENGTH_SHORT).show()
+        }
+        select(listOf("Choose processing preset", "Baseline (1.5.1 processing)", "Efficient processing"), 0) { position ->
+            if (position != 0) {
+                applyPower(if (position == 1) PowerOptions.BASELINE else PowerOptions.EFFICIENT)
+                recreate()
+            }
+        }
+        text("Efficient processing reduces Drive requests, combines checksum reads and reuses speech buffers. It keeps WAV and the capture wake lock. Upload timing stays as selected. Savings are unmeasured.")
+        fun powerSwitch(label: String, value: Boolean, options: (Boolean) -> PowerOptions) {
+            val toggle = Switch(this).apply { text = label; isChecked = value }
+            column.addView(toggle)
+            toggle.setOnCheckedChangeListener { _, enabled -> applyPower(options(enabled)) }
+        }
+        powerSwitch("Efficient uploads and checksums", AppSettings.powerOptions(this).efficientUploads) {
+            AppSettings.powerOptions(this).copy(efficientUploads = it)
+        }
+        powerSwitch("Reuse speech-analysis buffers", AppSettings.powerOptions(this).reuseSpeechBuffers) {
+            AppSettings.powerOptions(this).copy(reuseSpeechBuffers = it)
+        }
+        text("Audio format (next start)")
+        select(PowerOptions.formatLabels, AppSettings.powerOptions(this).audioFormat) { position ->
+            if (position != AppSettings.powerOptions(this).audioFormat)
+                applyPower(AppSettings.powerOptions(this).copy(audioFormat = position))
+        }
+        text("AAC is a lossy compression trial for Continuous mode only. Complete emitted frames are checkpointed each second; audio buffered inside the encoder can also be lost on a crash. Existing recordings stay in their original format. Codec failure stops visibly and retains partial audio. Test recording quality and interruptions before relying on AAC.")
+        powerSwitch("Capture wake lock (default on)", AppSettings.powerOptions(this).captureWakeLock) {
+            AppSettings.powerOptions(this).copy(captureWakeLock = it)
+        }
+        text("Turning this off is experimental. Android still manages audio locks. Screen-off capture may be interrupted and savings are not guaranteed. Test separately with WAV and a known audio source.")
         text("Recording mode (applies next start)")
         val modes = RadioGroup(this)
         val continuous = RadioButton(this).apply { id = View.generateViewId(); text = "Continuous" }

@@ -180,7 +180,7 @@ class MainActivity : Activity() {
         val logPending = RecordingFiles.logs(this).pendingLogs().size
         val lastLog = prefs.getLong(UploadWorker.PREF_LOG_SUCCESS_AT, 0)
         val lastLogLabel = if (lastLog > 0) java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.ROOT).format(java.util.Date(lastLog)) else "none yet"
-        infoText.text = "${store.pending().size} audio pending | $megabytes MB\n${RecorderStatus.mode(this)}\nPreset: ${AppSettings.presetLabel(this)}\n${AppSettings.uploadLabel(this)}\n$detail\nAudio: ${prefs.getString(UploadWorker.PREF_AUDIO_STATUS, "Not synced yet")}\nLogs: $logPending sealed batches pending\n${prefs.getString(UploadWorker.PREF_LOG_STATUS, "No log sync yet")}\nLast log sync: $lastLogLabel"
+        infoText.text = "${store.pending().size} audio pending | $megabytes MB\n${RecorderStatus.mode(this)}\nProcessing: ${AppSettings.powerOptions(this).label}\nFormat: ${AppSettings.powerOptions(this).formatLabel}\nPreset: ${AppSettings.presetLabel(this)}\n${AppSettings.uploadLabel(this)}\n$detail\nAudio: ${prefs.getString(UploadWorker.PREF_AUDIO_STATUS, "Not synced yet")}\nLogs: $logPending sealed batches pending\n${prefs.getString(UploadWorker.PREF_LOG_STATUS, "No log sync yet")}\nLast log sync: $lastLogLabel"
         linkBtn.text = if (AuthManager.isAuthenticated()) "RELINK DRIVE" else "LINK DRIVE"
     }
 

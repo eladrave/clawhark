@@ -97,6 +97,46 @@ public final class RecordingStoreTest {
             RecordingStore s=store(); File f=sealed(s); s.saveDriveId(f,"drive_id");
             s.acknowledge(f,"drive_id",f.length(),RecordingStore.digest(f,"MD5")); check(!f.exists(),"Verified copy not cleaned");
         });
+        test("single-pass receipt digests match both established algorithms", () -> {
+            RecordingStore s=store(); File f=sealed(s);
+            RecordingStore.ReceiptDigests combined=RecordingStore.receiptDigests(f);
+            check(combined.md5.equals(RecordingStore.digest(f,"MD5")),"MD5 changed");
+            check(combined.sha256.equals(RecordingStore.digest(f,"SHA-256")),"SHA256 changed");
+        });
+        test("efficient ACK still rejects mismatched identity size and hash", () -> {
+            RecordingStore s=store(); File f=sealed(s); s.saveDriveId(f,"drive_id"); String md5=RecordingStore.digest(f,"MD5");
+            for(int i=0;i<3;i++) {
+                try { s.acknowledge(f,i==0?"wrong":"drive_id",f.length()+(i==1?1:0),i==2?"bad":md5,true);
+                    throw new AssertionError("False receipt accepted"); } catch(IOException expected) { }
+                check(f.exists(),"Original deleted");
+            }
+            s.acknowledge(f,"drive_id",f.length(),md5,true); check(!f.exists(),"Efficient verified ACK did not clean");
+        });
+        test("AAC prefix recovery joins the existing pending and verified cleanup path", () -> {
+            RecordingStore s = store();
+            byte[] header = AdtsRecovery.header(25), payload = new byte[25];
+            File part = new File(s.directory(), "RaveAI_test.aac.part");
+            try (OutputStream out = new FileOutputStream(part)) {
+                out.write(header); out.write(payload); out.write(header); out.write(new byte[3]);
+            }
+            check(s.pending().isEmpty(), "Partial AAC was uploadable");
+            check(s.recover() == 1, "AAC prefix not recovered through store");
+            File f = s.pending().get(0);
+            check(f.getName().endsWith(".aac") && f.length() == 32, "AAC prefix changed");
+            s.saveDriveId(f, "aac_drive_id");
+            s.acknowledge(f, "aac_drive_id", f.length(), RecordingStore.digest(f, "MD5"), true);
+            check(!f.exists() && s.pending().isEmpty(), "Verified AAC not cleaned");
+        });
+        test("explicit cleanup includes AAC parts but preserves diagnostic logs", () -> {
+            RecordingStore s = store();
+            Files.write(new File(s.directory(), "trial.aac").toPath(), new byte[]{1});
+            Files.write(new File(s.directory(), "interrupted.aac.part").toPath(), new byte[]{2});
+            Files.write(new File(s.directory(), "failed.aac.part.damaged-test").toPath(), new byte[]{3});
+            File log = new File(s.directory(), "diagnostic.log");
+            Files.write(log.toPath(), new byte[]{4});
+            check(s.deletePendingTestRecordings() == 3, "AAC cleanup count");
+            check(log.exists(), "AAC cleanup removed diagnostics");
+        });
         test("storage limit retains unuploaded originals", () -> {
             RecordingStore s=store(); File f=new File(s.directory(),"huge.wav");
             try(RandomAccessFile file=new RandomAccessFile(f,"rw")) { file.setLength(RecordingStore.MAX_BYTES+1); }

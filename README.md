@@ -3,6 +3,16 @@
 Development fork of [ivar2000/clawhark](https://github.com/ivar2000/clawhark).
 First milestone: continuous microphone capture, durable local recordings, and verified Google Drive upload.
 
+## Current personal test build: 1.6.0
+
+[Download signed Rave-AI-1.6.0-watch.apk](https://chatgpt.com/library?file_id=libfile_76d219d7c9bc8191a14178f1baf27a8c&account_id=personal).
+Finish and sync the ongoing 1.5.1 trial before updating. Install over the current app; do not clear storage. The package and signing certificate match 1.5.1, and the Google configuration/native VAD payloads are unchanged. New experiment controls default to baseline behavior. Select **Efficient processing** for the first new trial, retaining Continuous, WAV, the capture wake lock and Every 15 minutes uploads.
+
+- Version code: 9. APK size: 15,098,520 bytes.
+- SHA-256: `bd34036212a7416be9bd1e7d71a471add31c31ed837805dfe0f558e6387c3728`.
+- Validation: 103 Android unit tests and 21 host recovery tests passed; assembly and lint passed, with zero errors and 81 warnings. APK signature and ZIP alignment verified. A synthetic AAC fixture rebuilt with the app's ADTS headers decoded successfully with FFmpeg. This does not qualify the watch's actual encoder.
+- Optional AAC and capture-wake-lock-off controls remain experimental. See [controls, recovery limitations and matched trials](docs/battery-experiments-1.6.md).
+
 ## Current development behavior
 
 - Start/Stop on the watch. Recording works without linking Drive or having a network connection.
@@ -16,7 +26,7 @@ First milestone: continuous microphone capture, durable local recordings, and ve
 
 **Development build, not yet qualified on physical Pixel Watch 5 hardware.** No all-day battery claim. Power loss may lose audio since the last successful filesystem sync; storage hardware guarantees still apply. Damaged legacy M4A partials are retained for manual recovery.
 
-WAV costs about **115 MB/hour, 2.76 GB/day** of continuous recording, plus headers. It is intentionally simple for recovery qualification. Compression and encryption beyond device/app storage protection remain future work. Upload permits metered connections by default; Settings offers unmetered-only uploads.
+WAV costs about **115 MB/hour, 2.76 GB/day** of continuous recording, plus headers. It remains the default for recovery qualification. Version 1.6 adds optional experimental AAC compression, efficient processing and a capture wake-lock control; see [battery experiments and test procedure](docs/battery-experiments-1.6.md). AAC is Continuous-only and has an additional encoder-buffered crash-loss tail. No measured power saving or physical-watch qualification is claimed yet. Encryption beyond device/app storage protection remains future work. Upload permits metered connections by default; Settings offers unmetered-only uploads.
 
 ## Rave AI 1.1 controls
 

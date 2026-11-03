@@ -20,7 +20,8 @@ class DriveUploader(
     private val ownerStore: RecordingStore = store,
     idBatchSize: Int = 1,
     private val requestAllowed: () -> Boolean = { true },
-    private val onRequest: () -> Unit = {}
+    private val onRequest: () -> Unit = {},
+    private val optimizeUploads: Boolean = false
 ) {
     data class VerifiedCopy(val id: String, val size: Long, val md5: String)
     private val folders = mutableMapOf<String, String>()
@@ -70,8 +71,9 @@ class DriveUploader(
         } finally { create.disconnect() }
     }
 
-    private fun allocateId(file: File, token: String): String {
-        store.readDriveId(file)?.let { store.saveDriveId(file, it); return it }
+    private data class Allocation(val id: String, val fresh: Boolean)
+    private fun allocateId(file: File, token: String): Allocation {
+        store.readDriveId(file)?.let { store.saveDriveId(file, it); return Allocation(it, false) }
         if (availableIds.isEmpty()) {
             val conn = connection("https://www.googleapis.com/drive/v3/files/generateIds?count=$idCount&space=drive&type=files", token)
             val ids = try { response(conn).getJSONArray("ids") } finally { conn.disconnect() }
@@ -82,7 +84,7 @@ class DriveUploader(
         }
         val id = availableIds.removeFirst()
         store.saveDriveId(file, id) // synced before making the first mutating network request
-        return id
+        return Allocation(id, true)
     }
 
     private fun verifyOwner(token: String) {
@@ -116,8 +118,12 @@ class DriveUploader(
             check(file.isFile && file.length() > 0) { "Local recording missing or empty" }
             val localSize = file.length()
             val localMd5 = RecordingStore.digest(file, "MD5")
-            val id = allocateId(file, token)
-            var remote = inspect(id, token)
+            val allocation = allocateId(file, token)
+            val id = allocation.id
+            // A newly generated and unused ID cannot identify an earlier successful POST.
+            // Persisted IDs always need preflight: a previous request may have succeeded
+            // even when its response was lost. The post-POST verification is mandatory.
+            var remote = if (optimizeUploads && allocation.fresh) null else inspect(id, token)
             if (remote == null) {
                 val root = folder(token)
                 val destination = if (logFile) folder(token, "logs", root) else root
@@ -129,7 +135,11 @@ class DriveUploader(
                     conn.setRequestProperty("Content-Type", "multipart/related; boundary=$boundary")
                     val metadata = JSONObject().put("id", id).put("name", file.name)
                         .put("parents", JSONArray().put(destination))
-                    val mime = if (logFile) "text/plain; charset=UTF-8" else if (file.extension == "wav") "audio/wav" else "audio/mp4"
+                    val mime = if (logFile) "text/plain; charset=UTF-8" else when (file.extension) {
+                        "wav" -> "audio/wav"
+                        "aac" -> "audio/aac"
+                        else -> "audio/mp4"
+                    }
                     conn.outputStream.buffered().use { out ->
                         fun write(value: String) { out.write(value.toByteArray(Charsets.UTF_8)) }
                         write("--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$metadata")

@@ -10,11 +10,13 @@ class SpeechGate(
     private val state: (Boolean, Boolean) -> Unit,
     private val preFrames: Int = 50,
     private val tailFrames: Int = 100,
-    private val onsetFrames: Int = 2
+    private val onsetFrames: Int = 2,
+    private val reuseBuffers: Boolean = false
 ) {
-    private data class Frame(val samples: ShortArray, val at: Long)
+    private class Frame(val samples: ShortArray = ShortArray(320), var at: Long = 0L)
     private val before = ArrayDeque<Frame>()
-    private var frame = ShortArray(320)
+    private val free = ArrayDeque<Frame>()
+    private var frame = Frame()
     private var count = 0
     private var frameAt = 0L
     private var active = false
@@ -28,10 +30,12 @@ class SpeechGate(
         require(length in 0..samples.size)
         for (i in 0 until length) {
             if (count == 0) frameAt = startedAt + i * 1000L / 16000
-            frame[count++] = samples[i]
+            frame.samples[count++] = samples[i]
             if (count == 320) {
-                process(Frame(frame, frameAt))
-                frame = ShortArray(320); count = 0
+                frame.at = frameAt
+                process(frame)
+                frame = if (reuseBuffers && free.isNotEmpty()) free.removeFirst() else Frame()
+                count = 0
             }
         }
     }
@@ -44,14 +48,14 @@ class SpeechGate(
             if (failedOpen || positive >= onsetFrames) {
                 active = true; silence = 0
                 state(true, failedOpen)
-                while (before.isNotEmpty()) before.removeFirst().also { emit(it.samples, 320, it.at) }
-                emit(current.samples, 320, current.at)
+                while (before.isNotEmpty()) emitAndRelease(before.removeFirst())
+                emitAndRelease(current)
             } else {
                 before.addLast(current)
-                while (before.size > preFrames) before.removeFirst()
+                while (before.size > preFrames) release(before.removeFirst())
             }
         } else {
-            emit(current.samples, 320, current.at)
+            emitAndRelease(current)
             silence = if (speech) 0 else silence + 1
             if (silence >= tailFrames) {
                 end(); active = false; positive = 0; silence = 0
@@ -59,9 +63,18 @@ class SpeechGate(
             }
         }
     }
+    // Both callbacks consume PCM synchronously. Neither may retain a pooled array.
+    private fun emitAndRelease(current: Frame) {
+        emit(current.samples, 320, current.at)
+        release(current)
+    }
+    private fun release(current: Frame) {
+        if (reuseBuffers) free.addLast(current)
+    }
     fun finish() {
-        if (active && count > 0) emit(frame, count, frameAt)
+        if (active && count > 0) emit(frame.samples, count, frameAt)
         if (active) end()
-        before.clear(); count = 0; active = false
+        while (before.isNotEmpty()) release(before.removeFirst())
+        count = 0; active = false
     }
 }

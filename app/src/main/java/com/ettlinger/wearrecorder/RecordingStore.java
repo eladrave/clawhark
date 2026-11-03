@@ -48,7 +48,7 @@ public final class RecordingStore {
     }
 
     public List<File> pending() {
-        File[] files = dir.listFiles((d, n) -> n.endsWith(".wav") || n.endsWith(".m4a"));
+        File[] files = dir.listFiles((d, n) -> n.endsWith(".wav") || n.endsWith(".m4a") || n.endsWith(".aac"));
         List<File> result = files == null ? new ArrayList<>() : new ArrayList<>(Arrays.asList(files));
         result.sort(Comparator.comparing(File::getName));
         return result;
@@ -67,9 +67,9 @@ public final class RecordingStore {
             if (capture == null) throw new IOException("Stop recording before deleting test recordings");
             try (Lock upload = tryLock("upload")) {
                 if (upload == null) throw new IOException("Sync is still stopping; retry deletion shortly");
-                File[] files = dir.listFiles((d, n) -> n.endsWith(".wav") || n.endsWith(".m4a")
-                    || n.endsWith(".wav.part") || n.endsWith(".m4a.tmp") || n.endsWith(".m4a.uploading")
-                    || n.contains(".wav.part.damaged-") || n.contains(".m4a.tmp.damaged-"));
+                File[] files = dir.listFiles((d, n) -> n.endsWith(".wav") || n.endsWith(".m4a") || n.endsWith(".aac")
+                    || n.endsWith(".wav.part") || n.endsWith(".aac.part") || n.endsWith(".m4a.tmp") || n.endsWith(".m4a.uploading")
+                    || n.contains(".aac.part.damaged-") || n.contains(".wav.part.damaged-") || n.contains(".m4a.tmp.damaged-"));
                 if (files == null) throw new IOException("Cannot list test recordings");
                 int deleted = 0;
                 for (File f : files) {
@@ -133,6 +133,7 @@ public final class RecordingStore {
         // A legacy M4A may lack its MP4 index. Preserve it for manual recovery, never upload as valid audio.
         File[] legacy = dir.listFiles((d, n) -> n.endsWith(".m4a.tmp"));
         if (legacy != null) for (File f : legacy) quarantine(f);
+        recovered += AdtsRecovery.recoverDirectory(dir, directorySync);
         return recovered;
     }
 
@@ -262,6 +263,33 @@ public final class RecordingStore {
         } catch (java.security.NoSuchAlgorithmException e) { throw new IOException(e); }
     }
 
+    /** The receipt needs both hashes; one stream avoids a second full payload read. */
+    public static final class ReceiptDigests {
+        public final String md5;
+        public final String sha256;
+        private ReceiptDigests(String md5, String sha256) { this.md5 = md5; this.sha256 = sha256; }
+    }
+
+    public static ReceiptDigests receiptDigests(File file) throws IOException {
+        try {
+            MessageDigest md5 = MessageDigest.getInstance("MD5");
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = new FileInputStream(file)) {
+                byte[] buffer = new byte[32768]; int n;
+                while ((n = in.read(buffer)) != -1) {
+                    md5.update(buffer, 0, n); sha256.update(buffer, 0, n);
+                }
+            }
+            return new ReceiptDigests(hex(md5.digest()), hex(sha256.digest()));
+        } catch (java.security.NoSuchAlgorithmException e) { throw new IOException(e); }
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder result = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) result.append(String.format(Locale.ROOT, "%02x", b & 255));
+        return result.toString();
+    }
+
     public String readDriveId(File audio) throws IOException {
         File sidecar = new File(dir, "." + audio.getName() + ".drive-id");
         if (!sidecar.exists()) return null;
@@ -281,9 +309,16 @@ public final class RecordingStore {
 
     /** Only a verified remote copy may authorize local cleanup. Receipt is synced before deletion. */
     public void acknowledge(File audio, String remoteId, long remoteSize, String remoteMd5) throws IOException {
-        if (!audio.isFile() || !remoteId.equals(readDriveId(audio)) || audio.length() != remoteSize
-                || !digest(audio, "MD5").equalsIgnoreCase(remoteMd5)) throw new IOException("Cloud verification mismatch");
-        String sha256 = digest(audio, "SHA-256");
+        acknowledge(audio, remoteId, remoteSize, remoteMd5, false);
+    }
+
+    public void acknowledge(File audio, String remoteId, long remoteSize, String remoteMd5, boolean optimizeDigests) throws IOException {
+        if (!audio.isFile() || !remoteId.equals(readDriveId(audio)) || audio.length() != remoteSize)
+            throw new IOException("Cloud verification mismatch");
+        ReceiptDigests digests = optimizeDigests ? receiptDigests(audio) : null;
+        String md5 = digests == null ? digest(audio, "MD5") : digests.md5;
+        if (!md5.equalsIgnoreCase(remoteMd5)) throw new IOException("Cloud verification mismatch");
+        String sha256 = digests == null ? digest(audio, "SHA-256") : digests.sha256;
         durableText(new File(dir, "." + audio.getName() + ".receipt"),
             remoteId + "\n" + remoteSize + "\n" + remoteMd5 + "\n" + sha256 + "\n");
         if (!audio.delete()) throw new IOException("Cloud verified; local cleanup will retry");
@@ -328,7 +363,7 @@ public final class RecordingStore {
         if (!tmp.renameTo(target)) throw new IOException("Cannot persist recording metadata");
         syncDirectory(target.getParentFile());
     }
-    private void syncDirectory(File directory) throws IOException { directorySync.sync(directory); }
+    public void syncDirectory(File directory) throws IOException { directorySync.sync(directory); }
 
     private static void hostDirectorySync(File directory) throws IOException {
         try (FileChannel channel = FileChannel.open(directory.toPath(), StandardOpenOption.READ)) {

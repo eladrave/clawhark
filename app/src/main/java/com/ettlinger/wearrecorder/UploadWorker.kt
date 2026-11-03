@@ -152,6 +152,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     status("Link Drive to upload. Files retained.")
                     return@withContext Result.success()
                 }
+                val efficientUploads = AppSettings.powerOptions(applicationContext).efficientUploads
                 val startedAt = SystemClock.elapsedRealtime()
                 val batch = UploadBatch(SystemClock::elapsedRealtime)
                 val logs = RecordingFiles.logs(applicationContext)
@@ -159,16 +160,16 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 AppLog.flush()
                 val pendingLogs = if (allowed(true)) UploadBatch.snapshot(logs.pendingLogs().filterNot(SyncSessionStore::isReceipt), cutoff) else emptyList()
                 val pendingAudio = if (allowed(false)) UploadBatch.snapshot(store.pending(), cutoff) else emptyList()
-                AppLog.i("Profile", "Batch start; audio=${pendingAudio.size}; logs=${pendingLogs.size}; manual=$manual; cutoff_ms=$cutoff; ${AppSettings.profile(applicationContext)}")
+                AppLog.i("Profile", "Batch start; audio=${pendingAudio.size}; logs=${pendingLogs.size}; manual=$manual; cutoff_ms=$cutoff; effective_efficient_uploads=$efficientUploads; ${AppSettings.profile(applicationContext)}")
                 status("Syncing selected files; diagnostics first")
                 var http = 0
                 val logUploader = DriveUploader(logs, ownerStore = store, idBatchSize = pendingLogs.size, requestAllowed = {
                     SyncMeasurements.observe(applicationContext); allowed(true)
-                }, onRequest = { requestCount++ })
+                }, onRequest = { requestCount++ }, optimizeUploads = efficientUploads)
                 // Diagnostic errors and test markers cannot be stranded behind hundreds of audio files.
                 val logResult = batch.run(pendingLogs, { allowed(true) }, { logUploader.uploadFile(it, logFile = true) },
                     { file, copy ->
-                        logs.acknowledge(file, copy.id, copy.size, copy.md5)
+                        logs.acknowledge(file, copy.id, copy.size, copy.md5, efficientUploads)
                         if (measured) SyncMeasurements.verified(applicationContext, session, true, copy.size)
                     },
                     { index, total ->
@@ -188,10 +189,10 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 activeStatusKey = PREF_AUDIO_STATUS
                 val audioUploader = DriveUploader(store, idBatchSize = pendingAudio.size, requestAllowed = {
                     SyncMeasurements.observe(applicationContext); allowed(false)
-                }, onRequest = { requestCount++ })
+                }, onRequest = { requestCount++ }, optimizeUploads = efficientUploads)
                 val audioResult = batch.run(pendingAudio, { allowed(false) }, { audioUploader.uploadFile(it) },
                     { file, copy ->
-                        store.acknowledge(file, copy.id, copy.size, copy.md5)
+                        store.acknowledge(file, copy.id, copy.size, copy.md5, efficientUploads)
                         if (measured) SyncMeasurements.verified(applicationContext, session, false, copy.size)
                     },
                     { index, total ->
@@ -209,7 +210,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 val failed = logResult.failed || audioResult.failed
                 val paused = logResult.paused || audioResult.paused
                 val remaining = logResult.remaining + audioResult.remaining
-                AppLog.i("Profile", "Batch result; verified_audio=${audioResult.verified}; verified_logs=${logResult.verified}; bytes=${audioResult.bytes + logResult.bytes}; elapsed_ms=${SystemClock.elapsedRealtime() - startedAt}; http=$http; remaining_audio=${store.pending().size}; remaining_logs=${logs.pendingLogs().size}; retry=$failed; paused=$paused; manual=$manual; ${AppSettings.profile(applicationContext)}")
+                AppLog.i("Profile", "Batch result; verified_audio=${audioResult.verified}; verified_logs=${logResult.verified}; bytes=${audioResult.bytes + logResult.bytes}; elapsed_ms=${SystemClock.elapsedRealtime() - startedAt}; http=$http; remaining_audio=${store.pending().size}; remaining_logs=${logs.pendingLogs().size}; retry=$failed; paused=$paused; manual=$manual; effective_efficient_uploads=$efficientUploads; ${AppSettings.profile(applicationContext)}")
                 val outcome = when { paused -> "aborted_policy"; failed -> "retry"; remaining > 0 -> "continuing"; else -> "completed" }
                 val intent = if (remaining > 0 && !failed && !paused && session != null)
                     SyncMeasurements.continuation(session, attempt, manual, epoch, cutoff) else null
@@ -270,12 +271,13 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 val logs = RecordingFiles.logs(applicationContext)
                 val file = logs.publishSyncReceipt(SyncSessionStore.receiptName(sessionId), state.getString("report"))
                 if (state.has("receipt_drive_id")) logs.saveDriveId(file, state.getString("receipt_drive_id"))
-                val uploader = DriveUploader(logs, ownerStore = owner, requestAllowed = ::allowed)
+                val efficientUploads = AppSettings.powerOptions(applicationContext).efficientUploads
+                val uploader = DriveUploader(logs, ownerStore = owner, requestAllowed = ::allowed, optimizeUploads = efficientUploads)
                 val copy = uploader.uploadFile(file, logFile = true)
                     ?: return if (allowed()) Result.retry() else Result.success()
                 // The uploader already persists a generated ID before POST. Retain it in the outbox before ACK can delete sidecars.
                 sessions.receiptId(sessionId, copy.id)
-                logs.acknowledge(file, copy.id, copy.size, copy.md5)
+                logs.acknowledge(file, copy.id, copy.size, copy.md5, efficientUploads)
                 sessions.delivered(sessionId)
                 SyncMeasurements.status(applicationContext, "Final sync summary verified in Drive")
                 applicationContext.getSharedPreferences(RecordingService.PREF_FILE, Context.MODE_PRIVATE).edit()

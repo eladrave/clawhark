@@ -54,7 +54,7 @@ class DriveUploaderTest {
         override fun getResponseCode(): Int { if (reply.timeout) throw SocketTimeoutException("response lost"); return reply.code }
         override fun getInputStream(): InputStream = ByteArrayInputStream(reply.body.toByteArray())
     }
-    private class Fixture(batchSize: Int = 1) {
+    private class Fixture(batchSize: Int = 1, optimize: Boolean = false) {
         val store = RecordingStore(Files.createTempDirectory("upload-test").toFile())
         val audio = store.begin(123).let { it.append(ByteArray(3200) { n -> n.toByte() }, 3200); it.seal() }
         val replies = ArrayDeque<Reply>()
@@ -65,7 +65,7 @@ class DriveUploaderTest {
             val reply = replies.removeFirst()
             assertTrue("Expected ${reply.match}, got $url", url.contains(reply.match))
             Fake(reply, url).also { requests.add(it) }
-        }, idBatchSize = batchSize)
+        }, idBatchSize = batchSize, optimizeUploads = optimize)
         fun account() { replies.add(Reply("/about?", 200, """{"user":{"permissionId":"owner"}}""")) }
         fun remote(md5: String = RecordingStore.digest(audio, "MD5")): String =
             """{"id":"stable_id","size":"${audio.length()}","md5Checksum":"$md5","trashed":false}"""
@@ -86,6 +86,68 @@ class DriveUploaderTest {
         assertNotNull(copy)
         assertEquals(1,f.requests.count { it.requestMethod=="POST" })
         assertTrue(f.audio.exists()) // uploader cannot delete; worker must persist the verified receipt
+    }
+
+    @Test fun efficientFreshUploadSkipsOnlyTheUnnecessaryPreflightAndVerifiesAfterPost() = runBlocking {
+        val f = Fixture(optimize = true); f.account()
+        f.replies.add(Reply("generateIds",200,"""{"ids":["stable_id"]}"""))
+        f.replies.add(Reply("/files?q=",200,"""{"files":[{"id":"folder"}]}"""))
+        f.replies.add(Reply("multipart",200,"""{"id":"stable_id"}"""))
+        f.replies.add(Reply("/files/stable_id?",200,f.remote()))
+        assertNotNull(f.uploader.uploadFile(f.audio))
+        assertEquals(5,f.uploader.requestCount)
+        assertEquals(1,f.requests.count { it.url.toString().contains("/files/stable_id?") })
+        assertEquals("stable_id", f.store.readDriveId(f.audio))
+        assertTrue(f.requests.indexOfFirst { it.requestMethod == "POST" } <
+            f.requests.indexOfFirst { it.url.toString().contains("/files/stable_id?") })
+        assertTrue(f.audio.exists())
+        assertTrue(f.replies.isEmpty())
+    }
+
+    @Test fun efficientUploadAfterLostPostResponseInspectsPersistedIdBeforeRetrying() = runBlocking {
+        val f = Fixture(optimize = true); f.account()
+        f.replies.add(Reply("generateIds",200,"""{"ids":["stable_id"]}"""))
+        f.replies.add(Reply("/files?q=",200,"""{"files":[{"id":"folder"}]}"""))
+        f.replies.add(Reply("multipart",200,"",true))
+        assertNull(f.uploader.uploadFile(f.audio))
+        assertEquals("stable_id",f.store.readDriveId(f.audio))
+        f.replies.add(Reply("/files/stable_id?",200,f.remote()))
+        assertNotNull(f.uploader.uploadFile(f.audio))
+        assertEquals(1,f.requests.count { it.requestMethod == "POST" })
+        assertTrue(f.audio.exists())
+        assertTrue(f.replies.isEmpty())
+    }
+
+    @Test fun efficientFreshUploadStillRejectsTheWrongRemoteChecksum() = runBlocking {
+        val f = Fixture(optimize = true); f.account()
+        f.replies.add(Reply("generateIds",200,"""{"ids":["stable_id"]}"""))
+        f.replies.add(Reply("/files?q=",200,"""{"files":[{"id":"folder"}]}"""))
+        f.replies.add(Reply("multipart",200,"""{"id":"stable_id"}"""))
+        f.replies.add(Reply("/files/stable_id?",200,f.remote("0".repeat(32))))
+        assertNull(f.uploader.uploadFile(f.audio))
+        assertTrue(f.audio.exists())
+        assertTrue(f.replies.isEmpty())
+    }
+
+    @Test fun efficientAllocationIsDurableBeforeTheFirstPost() = runBlocking {
+        val store = RecordingStore(Files.createTempDirectory("efficient-durable-id").toFile())
+        val audio = store.begin(1).let { it.append(ByteArray(640),640); it.seal() }
+        val replies = ArrayDeque<Reply>()
+        replies.add(Reply("/about?",200,"""{"user":{"permissionId":"owner"}}"""))
+        replies.add(Reply("generateIds",200,"""{"ids":["stable_id"]}"""))
+        replies.add(Reply("/files?q=",200,"""{"files":[{"id":"folder"}]}"""))
+        replies.add(Reply("multipart",200,"",true))
+        val uploader = DriveUploader(store, { "synthetic" }, { url ->
+            val reply = replies.removeFirst(); assertTrue(url.contains(reply.match))
+            if (url.contains("multipart")) {
+                // A new store sees the identity even if this POST never returns.
+                assertEquals("stable_id",RecordingStore(store.directory()).readDriveId(audio))
+            }
+            Fake(reply,url)
+        }, optimizeUploads = true)
+        assertNull(uploader.uploadFile(audio))
+        assertTrue(audio.exists())
+        assertTrue(replies.isEmpty())
     }
 
     @Test fun sameSizeWrongChecksumIsNotAcknowledged() = runBlocking {

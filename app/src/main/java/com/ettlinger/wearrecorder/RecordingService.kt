@@ -23,7 +23,7 @@ class RecordingService : Service() {
         const val NOTIFICATION_ID = 1
         const val SAMPLE_RATE = RecordingStore.SAMPLE_RATE
         const val CHUNK_DURATION_MS = 60_000L
-        private const val SEGMENT_BYTES = SAMPLE_RATE * 2L * CHUNK_DURATION_MS / 1000
+        private const val SEGMENT_SAMPLES = SAMPLE_RATE * CHUNK_DURATION_MS / 1000
         private const val BUFFER_SAMPLES = 4096
     }
 
@@ -119,13 +119,33 @@ class RecordingService : Service() {
         var lock: RecordingStore.Lock? = null
         var wakeLock: PowerManager.WakeLock? = null
         var segment: RecordingStore.Segment? = null
+        var encodedSegment: AacSegment? = null
+        var segmentSamples = 0L
+        val power = AppSettings.powerOptions(this)
         var vad: VadWebRTC? = null
         var gate: SpeechGate? = null
+        fun seal() {
+            // Detach before finalization: finish/recovery/finally may converge on this path.
+            val wav = segment; segment = null
+            val aac = encodedSegment; encodedSegment = null
+            segmentSamples = 0
+            val began = SystemClock.elapsedRealtime()
+            val sealed = try {
+                if (aac != null) aac.seal() else wav?.seal()
+            } finally {
+                try { wav?.close() } finally { aac?.close() }
+            }
+            val elapsed = SystemClock.elapsedRealtime() - began
+            if (aac != null) AppLog.i("Profile", "AAC segment sealed; elapsed_ms=$elapsed")
+            if (elapsed > 500) AppLog.w("Service", "Segment finalization delayed capture; elapsed_ms=$elapsed; continuity requires review")
+            if (sealed != null) { totalChunks++; UploadWorker.kick(this@RecordingService) }
+        }
         try {
+            power.checkCapture(speechOnly)
             lock = store.tryLock("capture") ?: throw IllegalStateException("Recorder already active")
             store.recover()
             store.checkSpace(SAMPLE_RATE * 2L)
-            wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
+            if (power.captureWakeLock) wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ClawHark:Capture").apply {
                     setReferenceCounted(false)
                     acquire()
@@ -142,27 +162,31 @@ class RecordingService : Service() {
             var storedSamples = 0L
             val space = CaptureSpaceBudget { store.checkSpace(it) }
             var recoveryAttempt = 0
-            fun seal() {
-                val sealed = segment?.seal()
-                if (sealed != null) totalChunks++
-                segment = null
-                if (sealed != null) UploadWorker.kick(this@RecordingService)
-            }
+            var deliveryGaps = 0
+            var maxDeliveryMs = 0L
+            // Qualify the initial encoder before opening the microphone. Unsupported codecs fail visibly.
+            if (power.audioFormat == PowerOptions.AAC) encodedSegment = AacSegment(store, recordingStartTime)
             fun append(input: ShortArray, length: Int, at: Long) {
                 val now = SystemClock.elapsedRealtime()
                 space.beforeAppend(now, length * 2)
-                if (segment == null) { segment = store.begin(at); checkpointAt = SystemClock.elapsedRealtime() }
-                for (i in 0 until length) {
-                    pcm[2 * i] = input[i].toByte()
-                    pcm[2 * i + 1] = (input[i].toInt() shr 8).toByte()
+                if (power.audioFormat == PowerOptions.AAC) {
+                    if (encodedSegment == null) { encodedSegment = AacSegment(store, at); checkpointAt = SystemClock.elapsedRealtime() }
+                    checkNotNull(encodedSegment).append(input, length)
+                } else {
+                    if (segment == null) { segment = store.begin(at); checkpointAt = SystemClock.elapsedRealtime() }
+                    for (i in 0 until length) {
+                        pcm[2 * i] = input[i].toByte()
+                        pcm[2 * i + 1] = (input[i].toInt() shr 8).toByte()
+                    }
+                    checkNotNull(segment).append(pcm, length * 2)
                 }
-                val current = checkNotNull(segment)
-                current.append(pcm, length * 2)
                 storedSamples += length
+                segmentSamples += length
                 if (now - checkpointAt >= 1000) {
-                    current.checkpoint(); checkpointAt = now
+                    if (power.audioFormat == PowerOptions.AAC) encodedSegment?.checkpoint() else segment?.checkpoint()
+                    checkpointAt = now
                 }
-                if (current.payloadBytes() >= SEGMENT_BYTES) seal()
+                if (segmentSamples >= SEGMENT_SAMPLES) seal()
             }
             if (speechOnly) {
                 try {
@@ -172,11 +196,11 @@ class RecordingService : Service() {
                         if (fallback) AppLog.w("VAD", "Detector unavailable; retaining all audio")
                         else AppLog.i("VAD", if (active) "Speech storage started" else "Waiting for speech")
                         notifyState(if (fallback) "VAD unavailable. Saving all audio." else if (active) "Saving speech on watch" else "Listening for speech")
-                    })
+                    }, reuseBuffers = power.reuseSpeechBuffers)
                 } catch (_: Exception) { vadFallback = true; speechOnly = false; AppLog.w("VAD", "Cannot initialize; saving all audio") }
                   catch (_: LinkageError) { vadFallback = true; speechOnly = false; AppLog.w("VAD", "Native detector unavailable; saving all audio") }
             }
-            AppLog.i("Profile", "Capture start; mode=${modeLabel()}; ${AppSettings.profile(this@RecordingService)}; pcm_hz=$SAMPLE_RATE; read_samples=$BUFFER_SAMPLES")
+            AppLog.i("Profile", "Capture start; mode=${modeLabel()}; ${AppSettings.profile(this@RecordingService)}; effective_power=${power.diagnostic}; pcm_hz=$SAMPLE_RATE; read_samples=$BUFFER_SAMPLES")
 
             while (requested && currentCoroutineContext().isActive) {
                 if (recorder == null) {
@@ -213,6 +237,12 @@ class RecordingService : Service() {
                     continue
                 }
                 if (read == 0) { delay(20); continue }
+                val deliveryMs = now - lastReadAt
+                maxDeliveryMs = maxOf(maxDeliveryMs, deliveryMs)
+                if (deliveryMs > 2000) {
+                    deliveryGaps++
+                    AppLog.w("Service", "Late microphone delivery; delay_ms=$deliveryMs; samples=$read; possible_gap=true; ${power.diagnostic}")
+                }
                 lastReadAt = now
                 lastAudioAt = now
                 recoveryAttempt = 0
@@ -226,7 +256,7 @@ class RecordingService : Service() {
                     notifyState(if (isListening()) "Listening for speech. ${store.pending().size} files pending"
                         else "Recording. ${store.pending().size} files awaiting upload")
                     lastStatusAt = now
-                    AppLog.i("Service", "Capture active; mode=${modeLabel()}; elapsed_ms=${now - captureAt}; input_ms=${inputSamples * 1000 / SAMPLE_RATE}; stored_ms=${storedSamples * 1000 / SAMPLE_RATE}; process_cpu_ms=${Process.getElapsedCpuTime() - cpuAt}; pending=${store.pending().size}; bytes=${store.bytesUsed()}")
+                    AppLog.i("Service", "Capture active; mode=${modeLabel()}; elapsed_ms=${now - captureAt}; input_ms=${inputSamples * 1000 / SAMPLE_RATE}; stored_ms=${storedSamples * 1000 / SAMPLE_RATE}; process_cpu_ms=${Process.getElapsedCpuTime() - cpuAt}; delivery_gaps=$deliveryGaps; max_delivery_ms=$maxDeliveryMs; effective_power=${power.diagnostic}; pending=${store.pending().size}; bytes=${store.bytesUsed()}")
                 }
             }
         } catch (e: CancellationException) {
@@ -244,11 +274,8 @@ class RecordingService : Service() {
                 recorder = null
                 try { gate?.finish() } catch (e: Exception) { AppLog.e("VAD", "Final speech buffer could not be written", e) }
                 try { vad?.close() } catch (_: Exception) { }
-                try { segment?.seal()?.also { totalChunks++ } }
-                catch (e: Exception) {
-                    try { segment?.close() } catch (_: Exception) { }
-                    fail("Recording stopped. Partial audio retained for recovery.", e)
-                }
+                try { seal() }
+                catch (e: Exception) { fail("Recording stopped. Partial audio retained for recovery.", e) }
                 try { lock?.close() } catch (_: Exception) { }
                 wakeLock?.let { if (it.isHeld) it.release() }
                 UploadWorker.kick(this@RecordingService)
