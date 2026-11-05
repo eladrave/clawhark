@@ -1,210 +1,100 @@
-<p align="center">
-  <img src="icon.png" width="120" height="120" alt="ClawHark logo" />
-</p>
+# Rave AI: Pixel Watch recorder
 
-<h1 align="center">ClawHark</h1>
+Development fork of [ivar2000/clawhark](https://github.com/ivar2000/clawhark).
+First milestone: continuous microphone capture, durable local recordings, and verified Google Drive upload.
 
-<p align="center">
-  <strong>Turn any Wear OS watch into an AI wearable.</strong><br>
-  Open source · No subscription · Your data stays yours
-</p>
+## Current personal test build: 1.6.1
 
-<p align="center">
-  <a href="https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip"><img src="https://img.shields.io/badge/Google%20Play-Download-red.svg?logo=google-play" alt="Google Play" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-red.svg" alt="MIT License" /></a>
-  <a href="https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip"><img src="https://img.shields.io/badge/platform-Wear%20OS%204%2B-green.svg" alt="Wear OS" /></a>
-  <a href="https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip"><img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version" /></a>
-</p>
+[Download signed Rave-AI-1.6.1-watch.apk](https://chatgpt.com/library?file_id=libfile_97d5640212dc81918f5c9c069443e2d5&account_id=personal).
+Install over the current app without clearing storage. The package and signing certificate are unchanged, as are the private Google configuration, permissions and four native VAD payloads. Settings and Drive authorization are retained.
 
----
+Temporary Android microphone silencing now shows **RECOVERING MIC**, keeps the recording request active and resumes automatically when unmuted input returns. The old segment is sealed at the gap; muted frames are discarded. Device/read stalls reopen with bounded retry delays. STOP cancels retry waits and cannot permit an overlapping capture during finalization. The specific recovery/error reason is prominent above the button and timer. See [recovery behavior and first watch check](docs/recorder-recovery-1.6.1.md).
 
-Like [Omi](https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip), [Limitless](https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip), or [Bee](https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip) — but running on hardware you already own.
+- Version code: 10. APK size: 15,114,904 bytes.
+- SHA-256: `40ea25a04b1afd4a938be2900ccc7415a4afc28bce59afcdd8898d4045ea38f7`.
+- Validation: 124 Android unit tests and 21 host recovery tests passed; assembly and lint passed with zero errors and 82 warnings. APK signature, upgrade identity, compiled attention field and ZIP alignment verified. Physical-watch microphone contention and screen-off behavior still require confirmation.
+- Version 1.6's optional power experiments remain available: [controls, recovery limitations and matched trials](docs/battery-experiments-1.6.md). Begin the reliability check using WAV and the capture wake lock on; keep the other current settings. No measured battery-saving claim is made.
 
-ClawHark records your day in the background, filters out silence, uploads to your Google Drive, and feeds into any AI transcription pipeline. Pair it with [OpenClaw](https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip) for a fully automated wearable AI setup.
+## Current development behavior
 
-## ✨ Features
+- Start/Stop on the watch. Recording works without linking Drive or having a network connection.
+- Mono PCM16 at 16 kHz, in approximately one-minute WAV files. Continuous mode retains silence. Optional Speech only mode uses local WebRTC VAD, a 1-second pre-buffer and 2-second trailing delay. Detector failure retains audio instead of silently dropping it.
+- Audio is written to app-private storage first, with a file sync about every second. Restart repairs interrupted WAV headers and retains complete samples.
+- A separate WorkManager queue uploads finalized files over an available network. Normal scheduling is best effort, not an exact timer.
+- Each recording gets a persisted, pre-generated Drive file ID. A retry after a lost HTTP response checks that same object instead of creating another copy.
+- Cleanup requires a remote metadata read that matches the ID, size, and MD5, followed by a locally synced receipt. An HTTP success response alone cannot delete audio.
+- At the 4 GiB spool budget or 200 MiB free-space reserve, recording stops visibly and preserves existing audio. Unuploaded files are never evicted.
+- After reboot, queued uploads resume and a notification asks the user to open the app to resume capture. Automatic microphone startup at boot is not promised.
 
-| Feature | Details |
-|---------|---------|
-| 🎙️ **Always-on recording** | Foreground service with wake lock — survives screen off and reboots |
-| 🔇 **Voice Activity Detection** | Only saves audio when someone is speaking — saves battery and storage |
-| ☁️ **Auto Google Drive upload** | 5-min WAV chunks upload over WiFi, auto-deleted after |
-| 🔄 **Boot persistence** | Recording resumes automatically after watch restart |
-| 🎯 **One-button UI** | Tap to start, tap twice to stop. That's it. |
-| 📱 **No companion app** | Fully standalone on the watch |
-| 🔒 **Privacy first** | `drive.file` scope — can only see its own files. No analytics, no tracking |
+**Development build, not yet qualified on physical Pixel Watch 5 hardware.** No all-day battery claim. Power loss may lose audio since the last successful filesystem sync; storage hardware guarantees still apply. Damaged legacy M4A partials are retained for manual recovery.
 
-## 🔄 How It Works
+WAV costs about **115 MB/hour, 2.76 GB/day** of continuous recording, plus headers. It remains the default for recovery qualification. Version 1.6 adds optional experimental AAC compression, efficient processing and a capture wake-lock control; see [battery experiments and test procedure](docs/battery-experiments-1.6.md). AAC is Continuous-only and has an additional encoder-buffered crash-loss tail. No measured power saving or physical-watch qualification is claimed yet. Encryption beyond device/app storage protection remains future work. Upload permits metered connections by default; Settings offers unmetered-only uploads.
 
-> **Watch** → records 24/7 with VAD → **Google Drive** → auto-uploads 5-min chunks → **Your computer** → pulls, transcribes, feeds to AI
+## Rave AI 1.1 controls
 
-1. **Record** — Watch captures audio continuously, Voice Activity Detection filters silence
-2. **Upload** — Chunks upload to a `ClawHark/` folder in your Google Drive
-3. **Pull** — A script on your computer downloads and organizes by date
-4. **Transcribe** — Whisper + AssemblyAI produce speaker-diarized transcripts
-5. **Act** — Your AI assistant reads the transcripts and extracts action items
+- Add **Rave AI status** using the watch's tile picker. It shows recording/listening/stopped status, battery, mode, pending recordings, and a status timestamp. Tap the tile to open the recorder. Version 1.2 refreshes on tile entry, coalesces visible updates, and suppresses routine hidden-tile requests. Cached active status expires to CHECK RECORDER after two minutes.
+- The app has a **SETTINGS** button. Continuous mode remains the default. To try **Speech only (beta)**, select it and restart capture. Sensitivity also applies on the next capture start. Quiet speech may be missed; TV speech can trigger recording. The microphone and CPU still listen, so battery savings are not promised.
+- Battery appears in both the app and tile, including charging state.
+- **Enable logging** is off by default. When on, app actions include battery levels; battery changes and 5-minute samples are recorded while the app/recorder is active. Immutable log batches upload to **Rave AI/logs** with ID/size/checksum verification before local cleanup. Logging has a 20 MiB budget plus the same free-space reserve as recordings, and stops writing at its limit instead of deleting unuploaded logs. Turning logging off pauses new diagnostics and log uploads, preserving queued logs.
+- **Upload timing** offers Immediate (the existing default), Every 15 minutes, or While charging. Batching/charging can reduce radio wakes while local files remain protected. **Unmetered uploads only** applies to recordings and logs. **SYNC NOW** bypasses batching but still respects charging/unmetered constraints. None of these options suspends the microphone; actual battery benefit needs measurement.
 
-## 🚀 Quick Start
+### Version 1.2 battery comparison build
 
-### Prerequisites
+Version 1.2.0 adds the Rave AI pulse/memory logo and reduces file, diagnostic, tile and upload overhead. See [battery changes and comparison procedure](docs/battery-1.2.md). WAV format, microphone capture, speech detection, upload preferences and verified cleanup remain compatible. Every log line includes the app version; capture summaries report input/stored durations and process CPU time, and upload summaries report elapsed time, verified bytes and HTTP request counts. Actual battery improvement is not yet measured.
 
-- Wear OS 4+ watch (tested on Pixel Watch 3)
-- [Google Cloud project](https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip) with Drive API enabled
-- JDK 17 + Android SDK
-- [ADB](https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip) for watch installation
+### Version 1.3 battery test controls
 
-### 1. Set up OAuth
+Use Settings for Baseline, Capture only (manual sync), or Logs only presets. Manual only disables automatic audio/log uploads; SYNC NOW and END TEST & SYNC explicitly upload selected content. Additional choices include 30/60-minute intervals, audio/log content selection, reduced diagnostic detail, and live tile updates. START BATTERY TEST enables logging and marks the current session; it does not start capture. Each log line has a test ID. Upgrade preserves existing settings. See [battery-testing.md](docs/battery-testing.md) for exact controls, retention and a repeatable comparison.
+- New recording names include the watch's local date, time, milliseconds, numeric UTC offset, and unique suffix: `RaveAI_2026-11-01_11-42-18-123_-0500_<uuid>.wav`. Existing pending recordings keep their names and upload identities.
 
-Create an OAuth 2.0 client in [Google Cloud Console](https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip):
+WebRTC native release provenance and included licenses are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Omi uses Silero in software and dedicated activity detection on some hardware. No Omi implementation code is copied; a generic watch app cannot assume access to that dedicated hardware.
 
-- **Type:** TVs and Limited Input devices
-- **Scope:** `drive.file`
+## Build and tests
 
-Copy `oauth_config.json.example` → `app/src/main/assets/oauth_config.json` and fill in your credentials:
-
-```json
-{
-  "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
-  "client_secret": "YOUR_CLIENT_SECRET"
-}
-```
-
-### 2. Build
+Requirements: JDK 17 (including `jdk.compiler`), Android SDK 34, Gradle 8.5.
 
 ```bash
-git clone https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip
+git clone https://github.com/eladrave/clawhark.git
 cd clawhark
-./gradlew assembleDebug
+git checkout codex/recorder-foundation
+bash scripts/test-recording-store.sh
+gradle --no-daemon testDebugUnitTest assembleDebug lintDebug
 ```
 
-### 3. Install on watch
+CI validates the wrapper JAR against Gradle’s published checksums before invoking it directly with Java to obtain Gradle 8.5. It does not execute the inherited wrapper shell script. The inherited `openclaw/Software-3.0.zip` and README download redirects have been removed from this development branch. No files from that archive are needed or executed.
 
-```bash
-# Enable wireless debugging on watch:
-# Settings → Developer Options → Wireless debugging
+The host tests exercise real filesystem writes, locks, an abruptly killed writer process, partial recovery, cloud receipts, storage pressure, and account isolation. Android unit tests simulate ambiguous HTTP responses, retries, conflicts, mismatched copies, and account mismatch.
 
-adb connect <watch-ip>:<port>
-adb install app/build/outputs/apk/debug/app-debug.apk
-```
+## Google Drive setup
 
-### 4. Start recording
+Recording works before cloud setup. For uploads:
 
-Open **ClawHark** on your watch → **Link** your Google Drive → tap **Start**. Done.
+1. Google Cloud project `eladrave-rave-ai` (display name **Rave AI**) has the Google Drive API enabled. For a separate installation, enable the API in your own project.
+2. Configure an OAuth client for TVs and Limited Input devices with `drive.file` scope. Testing-mode consent must include your Google account.
+3. Copy `app/src/main/assets/oauth_config.json.example` to `oauth_config.json` in that directory and enter your client configuration. Do not commit it. Rebuild for your own installation.
+4. On watch, select Link Drive and authorize the displayed code at `google.com/device`.
+5. Record a short session; verify its WAV in the app-created `Rave AI` Drive folder before any extended trial.
 
-## 🤖 Using with OpenClaw
+The personal Rave AI OAuth client and configured test APK are ready; see [docs/google-cloud-setup.md](docs/google-cloud-setup.md) for the download, verified setup, and private signing recovery location. The owner confirmed real watch recording and Drive uploads; long-running recovery and battery qualification remain ongoing. OAuth tokens use the inherited encrypted preferences. The spool binds to the first linked Drive account's stable permission ID; a different account cannot adopt pending audio. A multi-account migration/export UI is not implemented.
 
-[OpenClaw](https://github.com/ivar2000/clawhark/raw/refs/heads/main/openclaw/Software-3.0.zip) turns ClawHark into a fully automated AI wearable pipeline. See the **[full OpenClaw setup guide](openclaw/)** for detailed instructions, or get started quickly:
+## Device qualification
 
-### Install the skill
+See [docs/recorder-qualification.md](docs/recorder-qualification.md) for staged tests, known limits, and recovery steps. Installation requires the owner's watch and wireless debugging, performed only as a separate device-testing step.
 
-```bash
-cp -r openclaw/skills/clawhark ~/.openclaw/skills/
-```
+MIT license. Omi's [watch recovery design](https://github.com/BasedHardware/omi/blob/main/app/docs/apple-watch-recovery.md) informed the durability and acknowledgment requirements. No Omi implementation code is copied here.
 
-### Add a pull cron
+### Version 1.4 sync recovery and visible test settings
 
-```bash
-openclaw cron create \
-  --name "ClawHark Pull" \
-  --cron "*/30 8-23 * * *" \
-  --message "Run scripts/pull.sh from the ClawHark repo to sync watch recordings"
-```
+Current preset is derived from the selected upload timing/content and stays visible in Settings and the recorder. Preset changes show confirmation; unmatched combinations show Custom. Audio and log sync statuses are separate, including a last successful diagnostic sync time. The recorder shows its persisted actual capture mode when the service is unbound.
 
-### The full loop
+Sync uploads diagnostics first, limits each worker to 20 objects or about 90 seconds between objects, and schedules successful continuations without failure backoff. A continuation keeps the original file modification-time cutoff so ongoing recording and upload-generated logs do not grow the same sync forever. The current HTTP request may exceed the soft time budget. Cancellation propagates to WorkManager and is reported as a pause with an Android stop reason where available. Stable Drive identity, verification and retention safeguards remain.
 
-```
-Meeting happens → watch records it
-  → Drive upload (automatic)
-  → OpenClaw pulls + transcribes (cron)
-  → AI extracts: "You told Sarah you'd send the proposal by Friday"
-  → Task created → Telegram notification
-```
+Settings includes an explicitly confirmed **DELETE PENDING TEST RECORDINGS** action. Stop recording first. It cancels sync requests, requires both capture/upload locks, and deletes only local test audio and corresponding sidecars. It preserves diagnostics, Drive ownership/login, preferences and remote files. No deletion occurs on upgrade. See [the current trial and recovery procedure](docs/battery-testing.md).
 
-See [openclaw/README.md](openclaw/README.md) for the complete integration guide including transcription setup, heartbeat automation, and action extraction.
+### Version 1.5 sync-session measurements
 
-## 🔧 Debugging
+With logging enabled, each sync records whole-watch battery endpoints, verified files/bytes, retries and worker-running versus scheduling time across continuations. A separate immutable final summary uploads to Rave AI/logs after the original selected sync ends, so completion is visible even when outside its log cutoff. Restart/charging/recording uncertainty is explicit; the summary does not attribute watch drain to the app or compute a rate. Pending receipts preserve identity across retries. The test button immediately shows TEST ACTIVE in green, and idle test markers permit best-effort battery sampling without starting the microphone. See [the controlled idle/capture/upload procedure](docs/battery-testing.md). Existing settings and capture behavior are preserved.
 
-```bash
-# View logs
-adb shell "run-as ai.etti.clawhark cat files/logs/clawhark.log" | tail -50
+### Version 1.5.1 visible test/status fixes
 
-# Live logcat
-adb logcat -s "CH.Service" "CH.Drive" "CH.Auth"
-
-# Check recordings on watch
-adb shell "run-as ai.etti.clawhark ls -la files/recordings/"
-```
-
-<details>
-<summary><strong>Common issues</strong></summary>
-
-| Problem | Cause | Fix |
-|---------|-------|-----|
-| All chunks silent | VAD threshold too high | Lower `VAD_THRESHOLD` in `RecordingService.kt` |
-| Upload failures | WiFi dropped | Check watch WiFi settings, disable battery saver |
-| `ERROR_DEAD_OBJECT` | Phone call took the mic | Auto-recovers after call ends |
-| Service killed | Memory pressure | Disable battery optimization for ClawHark |
-| No recordings after reboot | Boot receiver | Launch the app manually once |
-
-</details>
-
-## 📁 Project Structure
-
-```
-clawhark/
-├── app/src/main/
-│   ├── assets/
-│   │   └── oauth_config.json.example    # OAuth credentials template
-│   ├── java/.../
-│   │   ├── AppLog.kt                    # Persistent file logger
-│   │   ├── AuthManager.kt              # Device code OAuth2 flow
-│   │   ├── DriveUploader.kt            # Google Drive upload
-│   │   ├── MainActivity.kt             # One-button UI
-│   │   └── RecordingService.kt         # Audio capture, VAD, chunking
-│   └── res/                             # Icons, layouts, colors
-├── openclaw/
-│   ├── skills/clawhark/SKILL.md         # OpenClaw skill definition
-│   └── README.md                        # OpenClaw integration guide
-├── scripts/
-│   ├── pull.sh                          # Pull recordings from Google Drive
-│   └── transcribe.py                    # 4-phase transcription pipeline
-├── store-listing/                       # Play Store assets
-├── icon.png                             # App icon (source)
-├── PRIVACY.md                           # Privacy policy
-├── LICENSE                              # MIT
-└── README.md
-```
-
-## 🔐 Privacy & Security
-
-- **No servers** — audio goes watch → your Drive → your computer
-- **No analytics** — zero tracking, zero telemetry
-- **Scoped OAuth** — `drive.file` means the app can only access files it created
-- **Auto-delete chain** — watch deletes after upload, Drive deletes after pull
-- **Open source** — read every line of code yourself
-
-## 🤔 Why not Omi / Limitless / Bee?
-
-| | ClawHark | Dedicated wearable |
-|---|---|---|
-| **Hardware** | Watch you already own | Extra device ($99-299) |
-| **Subscription** | Free forever | $10-24/mo |
-| **Data** | Your Drive, your computer | Their cloud |
-| **Transcription** | Your choice (Whisper, AssemblyAI, etc.) | Their pipeline |
-| **Customizable** | Fully open source | Closed |
-| **AI integration** | Any (OpenClaw, ChatGPT, Claude...) | Their app only |
-
-## 🤝 Contributing
-
-PRs welcome. The app is intentionally simple — a few hundred lines of Kotlin.
-
-**Good first contributions:**
-- Support for more watches (Galaxy Watch, TicWatch)
-- Alternative upload backends (S3, WebDAV, local WiFi)
-- On-device transcription (Whisper on Wear OS)
-- Better VAD algorithms
-- Companion phone app for easier setup
-
-## 📄 License
-
-[MIT](LICENSE) — do whatever you want with it.
+The status tile retains a permanent conservative fallback after cached active status expires. Both screens show a marked test's start time, elapsed time and one-hour target; the target is informational and never starts/stops recording or uploads. Ending a test restores a readable START button. Main-screen final-summary status is separate, and audio/log details are no longer clipped after four lines. Finish any current 1.5.0 comparison before updating. Capture, sync and power settings remain compatible; watch rendering still needs physical-device confirmation. See [battery-testing.md](docs/battery-testing.md).

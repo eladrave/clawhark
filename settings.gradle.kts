@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ClawHark"
+rootProject.name = "Rave AI"
 include(":app")

@@ -2,112 +2,38 @@ package com.ettlinger.wearrecorder
 
 import android.content.Context
 import android.util.Log
-import java.io.File
-import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.*
 
-/**
- * Persistent file logger + logcat. Logs to /data/data/ai.etti.clawhark/files/logs/
- * Pull via: adb shell "run-as ai.etti.clawhark cat files/logs/clawhark.log"
- * Or: adb shell "run-as ai.etti.clawhark ls -la files/logs/"
- */
+/** Opt-in app/battery diagnostics only. No audio, transcript, grant codes, or tokens. */
 object AppLog {
-    private const val TAG_PREFIX = "WR"
-    private const val MAX_LOG_SIZE = 2 * 1024 * 1024L // 2MB, then rotate
-    private const val FLUSH_BUFFER_SIZE = 4096
-    private const val FLUSH_INTERVAL_MS = 30_000L
-    private var logFile: File? = null
-    private var logDir: File? = null
-    private val buffer = StringBuilder()
-    private var lastFlushTime = 0L
-    // Safe to reuse: all access is @Synchronized
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-
-    @Synchronized
-    fun init(context: Context) {
-        if (logFile != null) return // Already initialized
-        val dir = File(context.filesDir, "logs")
-        dir.mkdirs()
-        logDir = dir
-        logFile = File(dir, "clawhark.log")
-
-        // Rotate if too big
-        logFile?.let {
-            if (it.exists() && it.length() > MAX_LOG_SIZE) {
-                val old = File(dir, "clawhark.old.log")
-                old.delete()
-                it.renameTo(old)
-                logFile = File(dir, "clawhark.log")
-            }
-        }
-
-        i("AppLog", "=== LOG INIT === pid=${android.os.Process.myPid()} time=${formatDate()}")
-    }
-
-    fun d(tag: String, msg: String) {
-        val fullTag = "$TAG_PREFIX.$tag"
-        Log.d(fullTag, msg)
-        writeToFile("D", fullTag, msg)
-    }
-
-    fun i(tag: String, msg: String) {
-        val fullTag = "$TAG_PREFIX.$tag"
-        Log.i(fullTag, msg)
-        writeToFile("I", fullTag, msg)
-    }
-
-    fun w(tag: String, msg: String) {
-        val fullTag = "$TAG_PREFIX.$tag"
-        Log.w(fullTag, msg)
-        writeToFile("W", fullTag, msg)
-    }
-
-    fun e(tag: String, msg: String, throwable: Throwable? = null) {
-        val fullTag = "$TAG_PREFIX.$tag"
-        Log.e(fullTag, msg, throwable)
-        val extra = throwable?.let { "\n  ${it.javaClass.simpleName}: ${it.message}\n  ${it.stackTraceToString().take(500)}" } ?: ""
-        writeToFile("E", fullTag, "$msg$extra")
-    }
-
-    private fun formatDate(): String = dateFormat.format(Date())
-
-    @Synchronized
-    private fun writeToFile(level: String, tag: String, msg: String) {
+    private var app: Context? = null
+    private var logs: DiagnosticLogStore? = null
+    @Volatile var status = "Off"
+        private set
+    @Synchronized fun init(context: Context) { if (app == null) app = context.applicationContext }
+    fun d(tag: String, msg: String) = write("D", tag, msg)
+    fun i(tag: String, msg: String) = write("I", tag, msg)
+    fun w(tag: String, msg: String) = write("W", tag, msg)
+    fun e(tag: String, msg: String, throwable: Throwable? = null) =
+        write("E", tag, msg + (throwable?.let { " [${it.javaClass.simpleName}]" } ?: ""))
+    @Synchronized private fun write(level: String, tag: String, message: String) {
+        val c = app ?: return
+        if (!AppSettings.logging(c)) { status = "Off"; return }
+        if (!UploadPolicy.keepDiagnostic(AppSettings.logDetail(c), level, tag)) return
         try {
-            buffer.append(formatDate()).append(' ').append(level).append('/').append(tag).append(": ").append(msg).append('\n')
+            if (logs == null) logs = DiagnosticLogStore(RecordingFiles.logs(c))
             val now = System.currentTimeMillis()
-            if (level == "E" || buffer.length >= FLUSH_BUFFER_SIZE || now - lastFlushTime >= FLUSH_INTERVAL_MS) {
-                flushBuffer()
-            }
-        } catch (_: Exception) { /* don't crash on log failure */ }
+            val at = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.ROOT).format(Date(now))
+            val safe = DiagnosticLogStore.redact(message.replace('\n', ' ').take(1200))
+            val line = "$at $level/$tag ${BatteryMonitor.label} | v=${BuildConfig.VERSION_NAME} test=${AppSettings.testId(c)} $safe"
+            logs!!.append(line, now, important = level == "E" || level == "W")
+            status = "Enabled"
+            Log.println(if (level == "E") Log.ERROR else Log.INFO, "RaveAI.$tag", safe)
+        } catch (_: Exception) { status = "Paused: log storage limit or write error" }
     }
-
-    @Synchronized
-    fun flush() {
-        flushBuffer()
-    }
-
-    // Must be called while holding the synchronized lock
-    private fun flushBuffer() {
-        if (buffer.isEmpty()) return
-        try {
-            logFile?.let { f ->
-                FileWriter(f, true).use { w ->
-                    w.write(buffer.toString())
-                }
-                // Rotate at runtime if log grew past limit
-                if (f.exists() && f.length() > MAX_LOG_SIZE) {
-                    logDir?.let { dir ->
-                        val old = File(dir, "clawhark.old.log")
-                        old.delete()
-                        f.renameTo(old)
-                        logFile = File(dir, "clawhark.log")
-                    }
-                }
-            }
-            buffer.clear()
-            lastFlushTime = System.currentTimeMillis()
-        } catch (_: Exception) { /* don't crash on log failure */ }
+    @Synchronized fun flush() { try { logs?.seal() } catch (_: Exception) { status = "Log write error" } }
+    @Synchronized fun checkpoint() {
+        try { logs?.checkpoint(System.currentTimeMillis()) } catch (_: Exception) { status = "Log write error" }
     }
 }

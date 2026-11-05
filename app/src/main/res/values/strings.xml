@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ClawHark</string>
+    <string name="app_name">Rave AI</string>
+    <string name="tile_description">Recorder status, battery, and pending uploads. Tap to open Rave AI.</string>
 </resources>

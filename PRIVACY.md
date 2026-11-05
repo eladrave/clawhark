@@ -1,72 +1,15 @@
-# ClawHark Privacy Policy
+# Development recorder privacy
 
-**Last updated:** February 28, 2026
+The watch captures microphone audio only after the user starts recording. It saves mono PCM/WAV files in app-private local storage, including silence in Continuous mode. Optional Speech only mode uses a local WebRTC detector to omit long non-speech intervals, with buffered context before and after speech. The microphone remains active in both modes. Recording can continue with the screen off. Stop ends capture; already saved files remain eligible for upload.
 
-## Overview
+When the user links Google Drive, the app requests `drive.file` access and uploads finalized recordings to its `Rave AI` folder through HTTPS. It also reads the linked account's Drive permission ID to prevent account changes from adopting another account's pending recordings. OAuth tokens use Android encrypted preferences. Local audio relies on Android device/app storage protection; additional application-level audio encryption is not implemented.
 
-ClawHark is an open-source audio recording app for Wear OS. It records audio on your watch and uploads it to **your own** Google Drive account. We do not operate any servers or collect any data.
+A verified remote ID, size, and checksum are required before local cleanup. Offline recordings stay on the watch until verified; at storage limits capture stops instead of evicting unuploaded files. The cloud copies are not automatically deleted by this recorder. The user controls them in Google Drive.
 
-## Data Collection
+Uploads may use metered connections unless the user enables unmetered-only uploads. The user can choose immediate uploads, approximately 15/30/60-minute batches, uploads while charging, or manual sync. Queued audio/log files stay on the watch until verified; storage limits still apply. There is no transcription, AI processing, analytics SDK, or third-party memory backend added by this branch. Diagnostic logging is off by default. If enabled, logs include app actions, recording state, byte/pending counts, timestamps, error categories and battery percentage/charging state. They do not include audio, transcripts, OAuth codes or tokens. Log batches upload to the linked account under Rave AI/logs. Verified remote ID, size and checksum are required before local log cleanup. A 20 MiB local budget and free-space reserve stop further log writes without evicting pending logs. Disabling logging pauses collection and log uploads; queued logs stay on the watch. Google Drive copies remain under the user's control.
 
-**ClawHark does not collect, store, or transmit any personal data to us or any third party.**
+An explicit confirmed test-cleanup control can delete pending local audio without a cloud receipt. It preserves diagnostics, authorization, settings and cloud copies, and refuses deletion during active capture/upload. No automatic eviction is introduced.
 
-### What the app accesses
+Use recording/pause controls and obtain any required consent for conversations you record. Do not uninstall or clear app storage while recordings need recovery.
 
-| Data | Purpose | Where it goes |
-|------|---------|---------------|
-| Microphone audio | Recording conversations | Saved locally on watch, then uploaded to YOUR Google Drive |
-| Google Drive (scoped) | Cloud backup of recordings | Your personal Drive account only, in a "ClawHark" folder |
-
-### What we do NOT collect
-
-- No analytics or telemetry
-- No crash reporting to external services
-- No advertising identifiers
-- No location data
-- No contact information
-- No usage tracking
-
-## Data Storage & Transfer
-
-1. **On-device:** Audio is recorded as WAV files and stored temporarily on the watch
-2. **Google Drive:** Files are uploaded to a "ClawHark" folder in your Google Drive using the `drive.file` scope (the app can only access files it created — it cannot read your other Drive files)
-3. **Auto-cleanup:** Local files are deleted after successful upload
-
-All data transfer uses HTTPS encryption. Audio files are not encrypted at rest on the watch or in Drive.
-
-## Google OAuth
-
-ClawHark uses Google's Device Authorization flow to link your Google account. The app requests only the `drive.file` scope, which limits access to files created by the app. You can revoke access at any time via [Google Account permissions](https://myaccount.google.com/permissions).
-
-## Third-Party Services
-
-The app uses only:
-- **Google Drive API** — for uploading recordings (governed by [Google's Privacy Policy](https://policies.google.com/privacy))
-
-No other third-party services, SDKs, or analytics tools are included.
-
-## Your Rights
-
-- You can stop recording at any time
-- You can sign out to revoke Drive access
-- You can delete all recordings from your Google Drive
-- You can uninstall the app to remove all local data
-- You can revoke OAuth access via your Google Account settings
-
-## Open Source
-
-ClawHark is fully open source. You can inspect the complete source code to verify these claims:
-https://github.com/etticat/clawhark
-
-## Children's Privacy
-
-ClawHark is not directed at children under 13. We do not knowingly collect data from children.
-
-## Changes
-
-We may update this policy. Changes will be posted in the GitHub repository and reflected in the "Last updated" date above.
-
-## Contact
-
-For questions about this privacy policy:
-- GitHub Issues: https://github.com/etticat/clawhark/issues
+With logging enabled, bounded local sync-session metadata includes battery/power/recording observations, app/firmware/test identifiers, timestamps, monotonic timing, verified file/byte counts and Drive request counts. An immutable final summary uploads to the same Rave AI/logs folder using the current upload policy. Its delivery is excluded from measurement. At most 32 undelivered/active metadata records of 64 KiB each are retained; delivered metadata is removed and pending records are not evicted. No audio content or speaker identity is included. Disabling logging pauses measurement and summary uploads without deleting previously queued diagnostics.

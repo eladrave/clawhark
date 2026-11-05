@@ -1,0 +1,49 @@
+name: Recorder validation
+on:
+  push:
+    branches: ['codex/recorder-*']
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: recorder-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Test durable spool on real files
+        run: bash scripts/test-recording-store.sh
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/wrapper-validation@v4
+      - name: Unit tests, Android build, and lint
+        run: java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain --no-daemon testDebugUnitTest assembleDebug lintDebug
+      - name: Summarize Android unit tests
+        if: always()
+        run: |
+          python3 - <<'REPORT'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('app/build/test-results/testDebugUnitTest/TEST-*.xml'):
+              root = ET.parse(path).getroot()
+              print(f"{root.attrib['name']}: {root.attrib['tests']} tests, {root.attrib['failures']} failures, {root.attrib['errors']} errors")
+          REPORT
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recorder-validation
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/reports/
+          retention-days: 7

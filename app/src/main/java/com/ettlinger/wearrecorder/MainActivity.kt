@@ -1,402 +1,239 @@
 package com.ettlinger.wearrecorder
 
 import android.Manifest
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Bundle
-import android.os.IBinder
-import android.os.PowerManager
-import android.provider.Settings
 import android.app.Activity
-import android.view.HapticFeedbackConstants
+import android.content.*
+import android.content.pm.PackageManager
+import android.os.*
 import android.view.View
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
 import androidx.core.app.ActivityCompat
-
 import kotlinx.coroutines.*
 
+/** Recording is available offline, independently of cloud authentication. */
 class MainActivity : Activity() {
-
     private var service: RecordingService? = null
     private var bound = false
-    private var bindRequested = false
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-
-    // Recording views
-    private lateinit var recordGroup: LinearLayout
+    private var authJob: Job? = null
+    private var uiJob: Job? = null
+    private var visible = false
+    private var startAfterPermission = false
     private lateinit var toggleBtn: Button
     private lateinit var statusText: TextView
+    private lateinit var attentionText: TextView
+    private lateinit var batteryText: TextView
+    private lateinit var testText: TextView
+    private lateinit var syncSummaryText: TextView
     private lateinit var infoText: TextView
-
-    // Auth views
+    private lateinit var recordGroup: LinearLayout
     private lateinit var authGroup: LinearLayout
-    private lateinit var authTitle: TextView
     private lateinit var authStatus: TextView
     private lateinit var authCode: TextView
     private lateinit var authBtn: Button
-
-    private var authPollingJob: Job? = null
-
-    // Double-tap protection
-    private var lastToggleTime = 0L
-    private var lastAuthTapTime = 0L
-
-    // Stop confirmation (two-tap)
-    private var confirmPending = false
-    private var confirmResetJob: Job? = null
-
-    // Auth polling animation
-    private var dotCount = 0
-
-    private companion object {
-        const val DEBOUNCE_MS = 600L
-        const val CONFIRM_TIMEOUT_MS = 3000L
-    }
-
+    private lateinit var linkBtn: Button
+    private val prefs get() = getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE)
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             service = (binder as RecordingService.LocalBinder).getService()
-            bound = true
             updateUI()
         }
-
-        override fun onServiceDisconnected(name: ComponentName) {
-            service = null
-            bound = false
-            updateUI()
-        }
+        override fun onServiceDisconnected(name: ComponentName) { service = null; updateUI() }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
         setContentView(R.layout.activity_main)
-
         AppLog.init(this)
         AuthManager.init(this)
-
-        // Recording views
-        recordGroup = findViewById(R.id.recordGroup)
         toggleBtn = findViewById(R.id.toggleBtn)
         statusText = findViewById(R.id.statusText)
+        attentionText = findViewById(R.id.attentionText)
         infoText = findViewById(R.id.infoText)
-
-        // Auth views
+        batteryText = findViewById(R.id.batteryText)
+        testText = findViewById(R.id.testText)
+        syncSummaryText = findViewById(R.id.syncSummaryText)
+        findViewById<Button>(R.id.settingsBtn).setOnClickListener {
+            AppLog.i("UI", "Settings opened")
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+        recordGroup = findViewById(R.id.recordGroup)
         authGroup = findViewById(R.id.authGroup)
-        authTitle = findViewById(R.id.authTitle)
         authStatus = findViewById(R.id.authStatus)
         authCode = findViewById(R.id.authCode)
         authBtn = findViewById(R.id.authBtn)
-
+        linkBtn = findViewById(R.id.linkBtn)
         toggleBtn.setOnClickListener {
-            val now = System.currentTimeMillis()
-            if (now - lastToggleTime < DEBOUNCE_MS) return@setOnClickListener
-            lastToggleTime = now
-            it.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-            if (checkPermissions()) {
-                toggle()
-            }
-        }
-
-        // Long press on toggle to sign out
-        toggleBtn.setOnLongClickListener {
-            it.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-            signOut()
-            true
-        }
-
-        authBtn.setOnClickListener {
-            val now = System.currentTimeMillis()
-            if (now - lastAuthTapTime < DEBOUNCE_MS) return@setOnClickListener
-            lastAuthTapTime = now
-            startDeviceCodeFlow()
-        }
-
-        checkPermissions()
-        showCorrectScreen()
-
-        // Update UI periodically
-        scope.launch {
-            while (isActive) {
+            if (service?.isFinalizing() == true) return@setOnClickListener
+            if (service?.isBusy() == true || prefs.getBoolean(RecordingService.PREF_SHOULD_RECORD, false)) {
+                prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, false)
+                    .remove(RecordingService.PREF_RECOVERY_REASON).commit()
+                startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
                 updateUI()
-                delay(1000)
-            }
+            } else startCapture()
+        }
+        linkBtn.setOnClickListener {
+            recordGroup.visibility = View.GONE
+            authGroup.visibility = View.VISIBLE
+            authStatus.text = "Connect your Google Drive"
+            if (AuthManager.pendingDeviceLink() != null) linkDrive(false)
+        }
+        authBtn.setOnClickListener { linkDrive() }
+        findViewById<Button>(R.id.offlineBtn).setOnClickListener {
+            // Cloud linking can finish while the visible user uses offline recording controls.
+            showRecorder()
+        }
+        UploadWorker.schedule(this)
+        UploadWorker.kick(this)
+        showRecorder()
+        if (AuthManager.pendingDeviceLink() != null && !prefs.getBoolean(RecordingService.PREF_SHOULD_RECORD, false)) {
+            authGroup.visibility = View.VISIBLE
+            recordGroup.visibility = View.GONE
         }
     }
 
     override fun onStart() {
         super.onStart()
-        requestBatteryExemption()
-        if (AuthManager.isAuthenticated()) {
-            val shouldRecord = getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE)
-                .getBoolean(RecordingService.PREF_SHOULD_RECORD, true)
-            if (shouldRecord) {
-                val intent = Intent(this, RecordingService::class.java)
-                startForegroundService(intent)
-                doBind(intent)
+        visible = true
+        uiJob?.cancel()
+        uiJob = scope.launch {
+            while (isActive) {
+                updateUI()
+                if (authJob?.isActive != true && AuthManager.pendingDeviceLink() != null) linkDrive(false)
+                delay(5000)
             }
         }
+        AppLog.i("UI", "Recorder screen opened")
+        bound = bindService(Intent(this, RecordingService::class.java), connection, BIND_AUTO_CREATE)
+        if (AuthManager.pendingDeviceLink() != null) linkDrive(false)
+        else if (AuthManager.isAuthenticated()) { showRecorder(); UploadWorker.kick(this) }
+        // Only resume previously requested capture from a visible Activity with microphone permission.
+        if (prefs.getBoolean(RecordingService.PREF_SHOULD_RECORD, false) && hasMic()) startCapture()
     }
-
     override fun onStop() {
+        visible = false
+        uiJob?.cancel(); uiJob = null
+        AppLog.i("UI", "Recorder screen hidden")
+        AppLog.checkpoint()
+        // Pause network polling, but retain the encrypted grant for onStart/process recreation.
+        authJob?.cancel()
+        if (bound) { unbindService(connection); bound = false; service = null }
         super.onStop()
-        doUnbind()
     }
+    override fun onDestroy() { scope.cancel(); super.onDestroy() }
 
-    override fun onDestroy() {
-        authPollingJob?.cancel()
-        confirmResetJob?.cancel()
-        scope.cancel()
-        super.onDestroy()
-    }
+    private fun hasMic() = ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    private fun doBind(intent: Intent) {
-        if (!bindRequested) {
-            bindService(intent, connection, Context.BIND_AUTO_CREATE)
-            bindRequested = true
+    private fun startCapture() {
+        if (!visible || service?.isFinalizing() == true) return
+        val needed = mutableListOf<String>()
+        if (!hasMic()) needed.add(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33 && ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (needed.isNotEmpty()) {
+            startAfterPermission = true
+            ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1)
+            return
         }
-    }
-
-    private fun doUnbind() {
-        if (bindRequested) {
-            unbindService(connection)
-            bindRequested = false
-            bound = false
-            service = null
-        }
-    }
-
-    private fun showCorrectScreen() {
-        if (AuthManager.isAuthenticated()) {
-            authGroup.visibility = View.GONE
-            recordGroup.visibility = View.VISIBLE
-        } else {
-            recordGroup.visibility = View.GONE
-            authGroup.visibility = View.VISIBLE
-            authStatus.text = "Tap LINK to connect\nyour Google Drive"
-            authCode.visibility = View.GONE
-        }
-    }
-
-    // ─── Sign Out ─────────────────────────────────────────────────────────
-
-    private fun signOut() {
-        val svc = service
-        if (svc != null && svc.isCurrentlyRecording()) {
-            getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE)
-                .edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, false).apply()
-            val intent = Intent(this, RecordingService::class.java).apply { action = RecordingService.ACTION_STOP }
-            startService(intent)
-        }
-        AuthManager.clearAuth()
-        Toast.makeText(this, "Signed out", Toast.LENGTH_SHORT).show()
-        showCorrectScreen()
-    }
-
-    // ─── Device Code Auth Flow ───────────────────────────────────────────
-
-    private fun startDeviceCodeFlow() {
-        authBtn.isEnabled = false
-        authBtn.text = "..."
-        authStatus.text = "Requesting code..."
-        authCode.visibility = View.GONE
-
-        scope.launch {
-            val response = AuthManager.requestDeviceCode()
-            if (response == null) {
-                authBtn.isEnabled = true
-                authBtn.text = "RETRY"
-                authStatus.text = "Failed to connect.\nCheck WiFi and retry."
-                return@launch
-            }
-
-            // Show the user code prominently
-            authTitle.text = "Enter code at"
-            authStatus.text = "google.com/device"
-            authCode.text = response.userCode
-            authCode.visibility = View.VISIBLE
-            authBtn.text = "WAITING"
-            dotCount = 0
-
-            // Poll for authorization
-            val interval = maxOf(response.interval, 5) * 1000L
-            authPollingJob = scope.launch pollLoop@{
-                while (isActive) {
-                    delay(interval)
-                    // Animate dots while polling
-                    dotCount = (dotCount + 1) % 4
-                    authBtn.text = "WAITING" + ".".repeat(dotCount)
-
-                    val result = AuthManager.pollForAuthorization(response.deviceCode)
-                    when (result) {
-                        is AuthManager.PollResult.Success -> {
-                            getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE)
-                                .edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, true).apply()
-                            authTitle.text = "Connected!"
-                            authStatus.text = ""
-                            authCode.visibility = View.GONE
-                            authBtn.text = "OK"
-                            delay(1500)
-                            showCorrectScreen()
-                            val intent = Intent(this@MainActivity, RecordingService::class.java)
-                            startForegroundService(intent)
-                            doBind(intent)
-                            return@pollLoop
-                        }
-                        is AuthManager.PollResult.Pending -> {
-                            // Keep waiting — dots already animated above
-                        }
-                        is AuthManager.PollResult.SlowDown -> {
-                            delay(5000)
-                        }
-                        is AuthManager.PollResult.Expired -> {
-                            authTitle.text = "Link Google Drive"
-                            authStatus.text = "Code expired.\nTap to try again."
-                            authCode.visibility = View.GONE
-                            authBtn.isEnabled = true
-                            authBtn.text = "RETRY"
-                            return@pollLoop
-                        }
-                        is AuthManager.PollResult.Error -> {
-                            authTitle.text = "Link Google Drive"
-                            authStatus.text = "Error: ${result.message}\nTap to retry."
-                            authCode.visibility = View.GONE
-                            authBtn.isEnabled = true
-                            authBtn.text = "RETRY"
-                            return@pollLoop
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ─── Recording Controls ──────────────────────────────────────────────
-
-    private fun toggle() {
-        val prefs = getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE)
-        val svc = service
-        if (svc == null || !svc.isCurrentlyRecording()) {
-            // Start recording — clear any pending stop confirmation
-            confirmPending = false
-            confirmResetJob?.cancel()
-            prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, true).apply()
-            val intent = Intent(this, RecordingService::class.java)
-            startForegroundService(intent)
-            doBind(intent)
-        } else {
-            // Stop recording — require two taps for confirmation
-            if (!confirmPending) {
-                confirmPending = true
-                toggleBtn.text = "SURE?"
-                statusText.text = "Tap again to stop"
-                toggleBtn.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                confirmResetJob = scope.launch {
-                    delay(CONFIRM_TIMEOUT_MS)
-                    confirmPending = false
-                    updateUI()
-                }
-                return
-            }
-            // Second tap — actually stop
-            confirmPending = false
-            confirmResetJob?.cancel()
-            prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, false).apply()
-            val intent = Intent(this, RecordingService::class.java).apply {
-                action = RecordingService.ACTION_STOP
-            }
-            startService(intent)
+        // Reopening the Activity may re-send START to an already recovering service.
+        // Only the service can clear that reason after new capture or actual recovery.
+        prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, true).commit()
+        try { startForegroundService(Intent(this, RecordingService::class.java)) }
+        catch (e: Exception) {
+            prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, false)
+                .putString(RecordingService.PREF_ERROR, "Cannot start recorder. Open the app and retry.").commit()
+            AppLog.e("UI", "Start rejected", e)
         }
         updateUI()
     }
 
+    override fun onRequestPermissionsResult(code: Int, permissions: Array<String>, results: IntArray) {
+        super.onRequestPermissionsResult(code, permissions, results)
+        if (code != 1 || !startAfterPermission) return
+        startAfterPermission = false
+        // Notification refusal does not revoke microphone permission or justify a request loop.
+        if (visible && hasMic()) {
+            prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, true).commit()
+            try { startForegroundService(Intent(this, RecordingService::class.java)) }
+            catch (e: Exception) { Toast.makeText(this, "Open recorder and retry", Toast.LENGTH_LONG).show() }
+        } else Toast.makeText(this, "Microphone permission required", Toast.LENGTH_LONG).show()
+    }
+
+    private fun showRecorder() { authGroup.visibility = View.GONE; recordGroup.visibility = View.VISIBLE; updateUI() }
     private fun updateUI() {
-        if (!AuthManager.isAuthenticated()) return
-
-        val svc = service
-        if (svc != null && svc.isCurrentlyRecording()) {
-            // Recording state — red button
-            toggleBtn.setBackgroundResource(R.drawable.circle_button_recording)
-            if (!confirmPending) {
-                statusText.text = "RECORDING"
-                statusText.setTextColor(0xFFCC3333.toInt())
-                toggleBtn.text = "STOP"
-            }
-
-            val elapsed = System.currentTimeMillis() - svc.recordingStartTime
-            val mins = (elapsed / 60000).toInt()
-            val hrs = mins / 60
-            val m = mins % 60
-            val chunks = svc.totalChunks
-            val mb = String.format("%.1f", svc.getStorageUsed() / 1024.0 / 1024.0)
-
-            infoText.text = "${hrs}h ${m}m | ${chunks} chunks\n${mb} MB | Drive"
-        } else {
-            // Stopped state — default button
-            toggleBtn.setBackgroundResource(R.drawable.circle_button)
-            confirmPending = false
-            statusText.text = "STOPPED"
-            statusText.setTextColor(0xFF888888.toInt())
-            toggleBtn.text = "START"
-            infoText.text = "Tap to record\nLong press to sign out"
+        batteryText.text = BatteryMonitor.label
+        testText.text = AppSettings.testDisplay(this)
+        testText.setTextColor(if (AppSettings.testId(this) != "none") 0xff71daca.toInt() else 0xffbbbbbb.toInt())
+        syncSummaryText.text = prefs.getString(SyncMeasurements.PREF_STATUS, "Final sync summary: none yet")
+        val liveState = when {
+            service?.isFinalizing() == true -> "SAVING AUDIO"
+            service?.isCurrentlyRecording() == true -> "RECORDING"
+            service?.isListening() == true -> "LISTENING"
+            service?.isBusy() == true -> "RECOVERING MIC"
+            service != null -> "STOPPED"
+            else -> null
         }
+        val display = RecorderAttentionUi.resolve(
+            prefs.getBoolean(RecordingService.PREF_SHOULD_RECORD, false), RecorderStatus.state(this), liveState,
+            prefs.getString(RecordingService.PREF_ERROR, null), prefs.getString(RecordingService.PREF_RECOVERY_REASON, null))
+        toggleBtn.isEnabled = service?.isFinalizing() != true
+        toggleBtn.text = if (display.stopAction) "STOP" else "START"
+        toggleBtn.contentDescription = if (display.stopAction) "Stop recording" else "Start recording"
+        toggleBtn.setBackgroundResource(if (display.recordingActive) R.drawable.circle_button_recording else R.drawable.circle_button)
+        statusText.text = display.label
+        statusText.setTextColor(RecorderAttentionUi.statusColor(display.label))
+        attentionText.text = display.reason.orEmpty()
+        attentionText.visibility = if (display.reason == null) View.GONE else View.VISIBLE
+        attentionText.setTextColor(RecorderAttentionUi.statusColor(display.label))
+        val store = RecordingFiles.open(this)
+        val megabytes = String.format("%.1f", store.bytesUsed() / 1024.0 / 1024.0)
+        val detail = prefs.getString(UploadWorker.PREF_STATUS, "Audio saved on watch")
+        val logPending = RecordingFiles.logs(this).pendingLogs().size
+        val lastLog = prefs.getLong(UploadWorker.PREF_LOG_SUCCESS_AT, 0)
+        val lastLogLabel = if (lastLog > 0) java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.ROOT).format(java.util.Date(lastLog)) else "none yet"
+        infoText.text = "${store.pending().size} audio pending | $megabytes MB\n${RecorderStatus.mode(this)}\nProcessing: ${AppSettings.powerOptions(this).label}\nFormat: ${AppSettings.powerOptions(this).formatLabel}\nPreset: ${AppSettings.presetLabel(this)}\n${AppSettings.uploadLabel(this)}\n$detail\nAudio: ${prefs.getString(UploadWorker.PREF_AUDIO_STATUS, "Not synced yet")}\nLogs: $logPending sealed batches pending\n${prefs.getString(UploadWorker.PREF_LOG_STATUS, "No log sync yet")}\nLast log sync: $lastLogLabel"
+        linkBtn.text = if (AuthManager.isAuthenticated()) "RELINK DRIVE" else "LINK DRIVE"
     }
 
-    // ─── Battery Exemption ─────────────────────────────────────────────
-
-    private fun requestBatteryExemption() {
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        if (pm.isIgnoringBatteryOptimizations(packageName)) return
-
-        // Only prompt once — don't nag on every app open
-        val prefs = getSharedPreferences(RecordingService.PREF_FILE, MODE_PRIVATE)
-        if (prefs.getBoolean("battery_exemption_asked", false)) return
-        prefs.edit().putBoolean("battery_exemption_asked", true).apply()
-
-        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-            data = Uri.parse("package:$packageName")
-        }
-        try {
-            startActivity(intent)
-        } catch (_: Exception) {
-            // Some watches may not support this intent
-        }
-    }
-
-    // ─── Permissions ─────────────────────────────────────────────────────
-
-    private fun checkPermissions(): Boolean {
-        val perms = arrayOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.POST_NOTIFICATIONS
-        )
-        val needed = perms.filter {
-            ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        return if (needed.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1)
-            false
-        } else true
-    }
-
-    override fun onRequestPermissionsResult(code: Int, perms: Array<String>, results: IntArray) {
-        super.onRequestPermissionsResult(code, perms, results)
-        if (results.all { it == PackageManager.PERMISSION_GRANTED }) {
-            if (AuthManager.isAuthenticated()) {
-                toggle()
-            }
-        } else {
-            val denied = perms.filterIndexed { i, _ -> results[i] != PackageManager.PERMISSION_GRANTED }
-            val permanentlyDenied = denied.any { !ActivityCompat.shouldShowRequestPermissionRationale(this, it) }
-            if (permanentlyDenied) {
-                Toast.makeText(this, "Permissions required.\nGo to Settings > Apps.", Toast.LENGTH_LONG).show()
+    private fun linkDrive(requestCode: Boolean = true) {
+        if (!visible || authJob?.isActive == true) return
+        authBtn.isEnabled = false
+        authBtn.text = "WAITING"
+        authJob = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                if (requestCode && AuthManager.requestDeviceCode() == null) {
+                    authCode.visibility = View.GONE
+                    authStatus.text = "Cloud setup unavailable.\nRecording works offline."
+                    return@launch
+                }
+                val linked = AuthManager.deviceLinkPoller().resume { session, message ->
+                    if (visible && authGroup.visibility == View.VISIBLE) {
+                        authCode.text = session.userCode
+                        authCode.visibility = if (AuthManager.pendingDeviceLink() != null) View.VISIBLE else View.GONE
+                        authStatus.text = message
+                    }
+                }
+                if (linked || AuthManager.isAuthenticated()) {
+                    UploadWorker.kick(this@MainActivity)
+                    if (visible) {
+                        showRecorder()
+                        Toast.makeText(this@MainActivity, "Google Drive linked", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("UI", "Drive linking interrupted", e)
+                if (visible) authStatus.text = "Linking interrupted. Reopen the app to resume."
+            } finally {
+                // A stopped Activity's old request cannot reset a newer request's controls.
+                if (currentCoroutineContext()[Job] === authJob) {
+                    authJob = null
+                    authBtn.isEnabled = true
+                    authBtn.text = if (AuthManager.pendingDeviceLink() != null) "CHECK LINK" else "LINK"
+                }
             }
         }
+        authJob?.start()
     }
 }
