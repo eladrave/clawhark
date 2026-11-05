@@ -3,15 +3,17 @@
 Development fork of [ivar2000/clawhark](https://github.com/ivar2000/clawhark).
 First milestone: continuous microphone capture, durable local recordings, and verified Google Drive upload.
 
-## Current personal test build: 1.6.0
+## Current personal test build: 1.6.1
 
-[Download signed Rave-AI-1.6.0-watch.apk](https://chatgpt.com/library?file_id=libfile_76d219d7c9bc8191a14178f1baf27a8c&account_id=personal).
-Finish and sync the ongoing 1.5.1 trial before updating. Install over the current app; do not clear storage. The package and signing certificate match 1.5.1, and the Google configuration/native VAD payloads are unchanged. New experiment controls default to baseline behavior. Select **Efficient processing** for the first new trial, retaining Continuous, WAV, the capture wake lock and Every 15 minutes uploads.
+[Download signed Rave-AI-1.6.1-watch.apk](https://chatgpt.com/library?file_id=libfile_97d5640212dc81918f5c9c069443e2d5&account_id=personal).
+Install over the current app without clearing storage. The package and signing certificate are unchanged, as are the private Google configuration, permissions and four native VAD payloads. Settings and Drive authorization are retained.
 
-- Version code: 9. APK size: 15,098,520 bytes.
-- SHA-256: `bd34036212a7416be9bd1e7d71a471add31c31ed837805dfe0f558e6387c3728`.
-- Validation: 103 Android unit tests and 21 host recovery tests passed; assembly and lint passed, with zero errors and 81 warnings. APK signature and ZIP alignment verified. A synthetic AAC fixture rebuilt with the app's ADTS headers decoded successfully with FFmpeg. This does not qualify the watch's actual encoder.
-- Optional AAC and capture-wake-lock-off controls remain experimental. See [controls, recovery limitations and matched trials](docs/battery-experiments-1.6.md).
+Temporary Android microphone silencing now shows **RECOVERING MIC**, keeps the recording request active and resumes automatically when unmuted input returns. The old segment is sealed at the gap; muted frames are discarded. Device/read stalls reopen with bounded retry delays. STOP cancels retry waits and cannot permit an overlapping capture during finalization. The specific recovery/error reason is prominent above the button and timer. See [recovery behavior and first watch check](docs/recorder-recovery-1.6.1.md).
+
+- Version code: 10. APK size: 15,114,904 bytes.
+- SHA-256: `40ea25a04b1afd4a938be2900ccc7415a4afc28bce59afcdd8898d4045ea38f7`.
+- Validation: 124 Android unit tests and 21 host recovery tests passed; assembly and lint passed with zero errors and 82 warnings. APK signature, upgrade identity, compiled attention field and ZIP alignment verified. Physical-watch microphone contention and screen-off behavior still require confirmation.
+- Version 1.6's optional power experiments remain available: [controls, recovery limitations and matched trials](docs/battery-experiments-1.6.md). Begin the reliability check using WAV and the capture wake lock on; keep the other current settings. No measured battery-saving claim is made.
 
 ## Current development behavior
 

@@ -21,6 +21,7 @@ class MainActivity : Activity() {
     private var startAfterPermission = false
     private lateinit var toggleBtn: Button
     private lateinit var statusText: TextView
+    private lateinit var attentionText: TextView
     private lateinit var batteryText: TextView
     private lateinit var testText: TextView
     private lateinit var syncSummaryText: TextView
@@ -47,6 +48,7 @@ class MainActivity : Activity() {
         AuthManager.init(this)
         toggleBtn = findViewById(R.id.toggleBtn)
         statusText = findViewById(R.id.statusText)
+        attentionText = findViewById(R.id.attentionText)
         infoText = findViewById(R.id.infoText)
         batteryText = findViewById(R.id.batteryText)
         testText = findViewById(R.id.testText)
@@ -63,9 +65,11 @@ class MainActivity : Activity() {
         linkBtn = findViewById(R.id.linkBtn)
         toggleBtn.setOnClickListener {
             if (service?.isFinalizing() == true) return@setOnClickListener
-            if (service?.isBusy() == true) {
-                prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, false).commit()
+            if (service?.isBusy() == true || prefs.getBoolean(RecordingService.PREF_SHOULD_RECORD, false)) {
+                prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, false)
+                    .remove(RecordingService.PREF_RECOVERY_REASON).commit()
                 startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
+                updateUI()
             } else startCapture()
         }
         linkBtn.setOnClickListener {
@@ -131,6 +135,8 @@ class MainActivity : Activity() {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1)
             return
         }
+        // Reopening the Activity may re-send START to an already recovering service.
+        // Only the service can clear that reason after new capture or actual recovery.
         prefs.edit().putBoolean(RecordingService.PREF_SHOULD_RECORD, true).commit()
         try { startForegroundService(Intent(this, RecordingService::class.java)) }
         catch (e: Exception) {
@@ -159,24 +165,29 @@ class MainActivity : Activity() {
         testText.text = AppSettings.testDisplay(this)
         testText.setTextColor(if (AppSettings.testId(this) != "none") 0xff71daca.toInt() else 0xffbbbbbb.toInt())
         syncSummaryText.text = prefs.getString(SyncMeasurements.PREF_STATUS, "Final sync summary: none yet")
-        val active = service?.isCurrentlyRecording() == true
-        val busy = service?.isBusy() == true
-        toggleBtn.isEnabled = service?.isFinalizing() != true
-        toggleBtn.text = if (busy) "STOP" else "START"
-        toggleBtn.contentDescription = if (busy) "Stop recording" else "Start recording"
-        toggleBtn.setBackgroundResource(if (active) R.drawable.circle_button_recording else R.drawable.circle_button)
-        statusText.text = when {
+        val liveState = when {
             service?.isFinalizing() == true -> "SAVING AUDIO"
-            active -> "RECORDING"
+            service?.isCurrentlyRecording() == true -> "RECORDING"
             service?.isListening() == true -> "LISTENING"
-            busy -> "RECOVERING MIC"
-            prefs.contains(RecordingService.PREF_ERROR) -> "NEEDS ATTENTION"
-            else -> "STOPPED"
+            service?.isBusy() == true -> "RECOVERING MIC"
+            service != null -> "STOPPED"
+            else -> null
         }
+        val display = RecorderAttentionUi.resolve(
+            prefs.getBoolean(RecordingService.PREF_SHOULD_RECORD, false), RecorderStatus.state(this), liveState,
+            prefs.getString(RecordingService.PREF_ERROR, null), prefs.getString(RecordingService.PREF_RECOVERY_REASON, null))
+        toggleBtn.isEnabled = service?.isFinalizing() != true
+        toggleBtn.text = if (display.stopAction) "STOP" else "START"
+        toggleBtn.contentDescription = if (display.stopAction) "Stop recording" else "Start recording"
+        toggleBtn.setBackgroundResource(if (display.recordingActive) R.drawable.circle_button_recording else R.drawable.circle_button)
+        statusText.text = display.label
+        statusText.setTextColor(RecorderAttentionUi.statusColor(display.label))
+        attentionText.text = display.reason.orEmpty()
+        attentionText.visibility = if (display.reason == null) View.GONE else View.VISIBLE
+        attentionText.setTextColor(RecorderAttentionUi.statusColor(display.label))
         val store = RecordingFiles.open(this)
         val megabytes = String.format("%.1f", store.bytesUsed() / 1024.0 / 1024.0)
-        val detail = prefs.getString(RecordingService.PREF_ERROR, null)
-            ?: prefs.getString(UploadWorker.PREF_STATUS, "Audio saved on watch")
+        val detail = prefs.getString(UploadWorker.PREF_STATUS, "Audio saved on watch")
         val logPending = RecordingFiles.logs(this).pendingLogs().size
         val lastLog = prefs.getLong(UploadWorker.PREF_LOG_SUCCESS_AT, 0)
         val lastLogLabel = if (lastLog > 0) java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.ROOT).format(java.util.Date(lastLog)) else "none yet"

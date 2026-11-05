@@ -18,6 +18,7 @@ class RecordingService : Service() {
         const val PREF_FILE = "clawhark"
         const val PREF_SHOULD_RECORD = "should_record"
         const val PREF_ERROR = "recording_error"
+        const val PREF_RECOVERY_REASON = "mic_recovery_reason"
         const val ACTION_STOP = "STOP"
         const val CHANNEL_ID = "clawhark_channel"
         const val NOTIFICATION_ID = 1
@@ -35,8 +36,7 @@ class RecordingService : Service() {
     @Volatile private var speechOnly = false
     @Volatile private var speechActive = false
     @Volatile private var vadFallback = false
-    @Volatile private var recorder: AudioRecord? = null
-    @Volatile private var lastAudioAt = 0L
+    @Volatile private var microphone: RecoveringMicrophone? = null
     @Volatile var recordingStartTime = 0L
         private set
     @Volatile var totalChunks = 0
@@ -60,16 +60,21 @@ class RecordingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             AppLog.i("Recorder", "Stop requested")
-            prefs.edit().putBoolean(PREF_SHOULD_RECORD, false).commit()
+            prefs.edit().putBoolean(PREF_SHOULD_RECORD, false).remove(PREF_RECOVERY_REASON).commit()
             requested = false
             capturing = false
             // Unblock a blocking read. The capture finally block seals before scheduling upload.
-            try { recorder?.stop() } catch (_: Exception) { }
-            if (job?.isActive != true) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
+            microphone?.unblock()
+            job?.cancel() // Interrupt retry delays too; finalization retains the final segment.
+            if (!CaptureJobOwnership.inFlight(job)) { stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
             return START_NOT_STICKY
         }
         if (!prefs.getBoolean(PREF_SHOULD_RECORD, false)) { stopSelf(); return START_NOT_STICKY }
-        if (job?.isActive == true) return START_STICKY
+        if (CaptureJobOwnership.inFlight(job)) {
+            // UI disables START while finalizing; reject stale/duplicate starts without creating a second owner.
+            if (!requested) prefs.edit().putBoolean(PREF_SHOULD_RECORD, false).apply()
+            return START_STICKY
+        }
         try {
             startForeground(NOTIFICATION_ID, notification("Starting recorder"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } catch (e: Exception) {
@@ -83,16 +88,14 @@ class RecordingService : Service() {
         vadFallback = false
         AppLog.i("Recorder", "Start requested; mode=${modeLabel()}")
         RecorderStatus.publish(this, "STARTING", modeLabel())
-        prefs.edit().remove(PREF_ERROR).commit()
+        prefs.edit().remove(PREF_ERROR).remove(PREF_RECOVERY_REASON).commit()
         job = scope.launch { capture() }
         watchdog?.cancel()
         watchdog = scope.launch {
             while (requested) {
                 delay(5000)
-                if (capturing && SystemClock.elapsedRealtime() - lastAudioAt > 10_000) {
-                    fail("Microphone stopped supplying audio. Open Rave AI to resume.", IllegalStateException("Capture stalled"))
-                    try { recorder?.stop() } catch (_: Exception) { }
-                }
+                if (microphone?.retryStalledRead(SystemClock.elapsedRealtime()) == true)
+                    AppLog.w("Service", "Microphone read stalled; unblocking for automatic recovery")
             }
         }
         return START_STICKY
@@ -101,12 +104,12 @@ class RecordingService : Service() {
     override fun onDestroy() {
         requested = false
         capturing = false
-        try { recorder?.stop() } catch (_: Exception) { }
+        microphone?.unblock()
         scope.cancel() // NonCancellable finalization retains the last segment.
         super.onDestroy()
     }
 
-    fun isFinalizing() = !requested && job?.isActive == true
+    fun isFinalizing() = CaptureJobOwnership.finalizing(requested, job)
     fun isBusy() = requested
     fun isCurrentlyRecording() = capturing && (!speechOnly || speechActive)
     fun isListening() = capturing && speechOnly && !speechActive
@@ -161,7 +164,6 @@ class RecordingService : Service() {
             var inputSamples = 0L
             var storedSamples = 0L
             val space = CaptureSpaceBudget { store.checkSpace(it) }
-            var recoveryAttempt = 0
             var deliveryGaps = 0
             var maxDeliveryMs = 0L
             // Qualify the initial encoder before opening the microphone. Unsupported codecs fail visibly.
@@ -202,50 +204,40 @@ class RecordingService : Service() {
             }
             AppLog.i("Profile", "Capture start; mode=${modeLabel()}; ${AppSettings.profile(this@RecordingService)}; effective_power=${power.diagnostic}; pcm_hz=$SAMPLE_RATE; read_samples=$BUFFER_SAMPLES")
 
-            while (requested && currentCoroutineContext().isActive) {
-                if (recorder == null) {
-                    try {
-                        recorder = openMicrophone()
-                        lastReadAt = SystemClock.elapsedRealtime()
-                        notifyState("Waiting for microphone audio")
-                    } catch (e: SecurityException) {
-                        throw e
-                    } catch (e: Exception) {
+            val acquisition = RecoveringMicrophone(::openMicrophone,
+                { requested && prefs.getBoolean(PREF_SHOULD_RECORD, false) }, SystemClock::elapsedRealtime,
+                { event ->
+                    if (requested && prefs.getBoolean(PREF_SHOULD_RECORD, false)) {
                         capturing = false
-                        notifyState("Microphone unavailable. Retrying. Saved audio retained.")
-                        delay(minOf(60_000L, 1000L shl minOf(recoveryAttempt++, 6)))
-                        continue
+                        if (event.first) {
+                            gate?.finish()
+                            speechActive = false
+                            seal()
+                            deliveryGaps++
+                            AppLog.w("Service", "Microphone interruption; reason=${event.reason}; automatic_recovery=true; audio_gap=true")
+                        } else AppLog.i("Service", "Microphone recovery pending; gap_ms=${event.elapsedMs}; reason=${event.reason}")
+                        if (requested) {
+                            prefs.edit().putString(PREF_RECOVERY_REASON, event.reason).apply()
+                            notifyState(event.reason)
+                        }
                     }
-                }
-                val audio = recorder ?: continue
-                val read = audio.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)
-                if (!requested) break
+                })
+            microphone = acquisition
+            while (requested && currentCoroutineContext().isActive) {
+                val delivery = acquisition.next(samples) ?: break
+                if (!requested || !prefs.getBoolean(PREF_SHOULD_RECORD, false)) break
+                val read = delivery.samples
                 val now = SystemClock.elapsedRealtime()
-                if (audio.activeRecordingConfiguration?.isClientSilenced == true) {
-                    throw IllegalStateException("Microphone silenced by another app. Open Rave AI to resume.")
-                }
-                if (read < 0 || (read == 0 && now - lastReadAt > 10_000)) {
-                    capturing = false
-                    gate?.finish()
-                    speechActive = false
-                    seal()
-                    try { audio.stop() } catch (_: Exception) { }
-                    audio.release()
-                    recorder = null
-                    notifyState("Microphone interrupted. Retrying. Saved audio retained.")
-                    delay(1000)
-                    continue
-                }
-                if (read == 0) { delay(20); continue }
                 val deliveryMs = now - lastReadAt
                 maxDeliveryMs = maxOf(maxDeliveryMs, deliveryMs)
-                if (deliveryMs > 2000) {
+                if (delivery.gapMs != null) {
+                    AppLog.i("Service", "Microphone recovered; gap_ms=${delivery.gapMs}; capture_resumed=true; missing_audio_not_reconstructed=true")
+                    prefs.edit().remove(PREF_RECOVERY_REASON).apply()
+                } else if (deliveryMs > 2000) {
                     deliveryGaps++
                     AppLog.w("Service", "Late microphone delivery; delay_ms=$deliveryMs; samples=$read; possible_gap=true; ${power.diagnostic}")
                 }
                 lastReadAt = now
-                lastAudioAt = now
-                recoveryAttempt = 0
                 val resumed = !capturing
                 capturing = true
                 if (resumed) notifyState(if (speechOnly) "Listening for speech" else "Recording. Audio saved on watch.")
@@ -269,9 +261,10 @@ class RecordingService : Service() {
                 watchdog = null
                 capturing = false
                 requested = false
-                try { recorder?.stop() } catch (_: Exception) { }
-                try { recorder?.release() } catch (_: Exception) { }
-                recorder = null
+                microphone?.unblock()
+                try { microphone?.close() } catch (_: Exception) { }
+                microphone = null
+                prefs.edit().remove(PREF_RECOVERY_REASON).apply()
                 try { gate?.finish() } catch (e: Exception) { AppLog.e("VAD", "Final speech buffer could not be written", e) }
                 try { vad?.close() } catch (_: Exception) { }
                 try { seal() }
@@ -290,7 +283,7 @@ class RecordingService : Service() {
     }
 
     @Suppress("MissingPermission")
-    private fun openMicrophone(): AudioRecord {
+    private fun openMicrophone(): RecoveringMicrophone.Input {
         val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         require(minimum > 0) { "Unsupported microphone format" }
         val audio = AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
@@ -299,14 +292,19 @@ class RecordingService : Service() {
             check(audio.state == AudioRecord.STATE_INITIALIZED) { "Microphone initialization failed" }
             audio.startRecording()
             check(audio.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Microphone did not start" }
-            return audio
+            return object : RecoveringMicrophone.Input {
+                override fun read(samples: ShortArray) = audio.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)
+                override fun silenced() = audio.activeRecordingConfiguration?.isClientSilenced == true
+                override fun stop() = audio.stop()
+                override fun close() = audio.release()
+            }
         } catch (e: Exception) { audio.release(); throw e }
     }
 
     private fun fail(message: String, error: Exception) {
         capturing = false
         requested = false
-        prefs.edit().putString(PREF_ERROR, message).putBoolean(PREF_SHOULD_RECORD, false).commit()
+        prefs.edit().putString(PREF_ERROR, message).putBoolean(PREF_SHOULD_RECORD, false).remove(PREF_RECOVERY_REASON).commit()
         AppLog.e("Service", message, error)
     }
 

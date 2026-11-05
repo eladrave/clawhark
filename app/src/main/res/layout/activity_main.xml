@@ -93,6 +93,20 @@
             android:textStyle="bold"
             android:layout_marginBottom="6dp" />
 
+        <TextView
+            android:id="@+id/attentionText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFC857"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textAlignment="center"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:layout_marginBottom="8dp"
+            android:accessibilityLiveRegion="polite"
+            android:visibility="gone" />
+
         <Button
             android:id="@+id/toggleBtn"
             android:layout_width="80dp"

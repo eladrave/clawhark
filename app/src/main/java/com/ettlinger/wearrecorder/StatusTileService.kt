@@ -29,7 +29,7 @@ class StatusTileService : TileService() {
                 column.addContent(LayoutElementBuilders.Spacer.Builder().setHeight(dp(3f)).build())
             }
             line("Rave AI · OPEN", 13f)
-            line(label, 16f, if (label == "RECORDING") 0xffff6666.toInt() else 0xff71daca.toInt())
+            line(label, 16f, RecorderAttentionUi.statusColor(label))
             line(BatteryMonitor.label, 12f)
             line(RecorderStatus.mode(this), 11f)
             line(if (pending >= 0) "$pending recordings pending" else "Storage needs attention", 10f)
